@@ -1,6 +1,6 @@
 import React from 'react';
 import { LorebookEntry } from '../types';
-import { Plus, Search, Book, FileText, Trash2, Copy, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Plus, Search, Book, FileText, Trash2, Copy, ToggleLeft, ToggleRight, Upload, Download } from 'lucide-react';
 
 interface LorebookListProps {
   entries: LorebookEntry[];
@@ -10,6 +10,8 @@ interface LorebookListProps {
   onDelete: (id: number) => void;
   onDuplicate: (entry: LorebookEntry) => void;
   onToggle: (uid: number) => void;
+  onImportWorldbook: (jsonStr: string) => void;
+  onExportWorldbook: () => void;
 }
 
 export const LorebookList: React.FC<LorebookListProps> = ({
@@ -20,6 +22,8 @@ export const LorebookList: React.FC<LorebookListProps> = ({
   onDelete,
   onDuplicate,
   onToggle,
+  onImportWorldbook,
+  onExportWorldbook,
 }) => {
   const [search, setSearch] = React.useState('');
 
@@ -39,13 +43,48 @@ export const LorebookList: React.FC<LorebookListProps> = ({
             <Book className="text-indigo-400" size={16} />
             Mục lục
           </h2>
-          <button 
-            onClick={onAdd}
-            className="p-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl click-bounce transition shadow-lg shadow-indigo-500/10 flex items-center justify-center"
-            title="Thêm mục mới"
-          >
-            <Plus size={16} />
-          </button>
+          <div className="flex items-center gap-2">
+            <label 
+              className="p-1.5 bg-slate-800/40 hover:bg-slate-800 text-indigo-400 hover:text-indigo-300 border border-white/[0.05] rounded-xl cursor-pointer click-bounce transition-all duration-200 flex items-center justify-center" 
+              title="Nhập Worldbook / Lorebook (.json)"
+            >
+              <Upload size={16} />
+              <input
+                type="file"
+                accept=".json"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const reader = new FileReader();
+                  reader.onload = (event) => {
+                    try {
+                      const text = event.target?.result as string;
+                      onImportWorldbook(text);
+                    } catch (err: any) {
+                      alert("Lỗi khi nhập tệp: " + err.message);
+                    }
+                  };
+                  reader.readAsText(file);
+                  e.target.value = '';
+                }}
+                className="hidden"
+              />
+            </label>
+            <button
+              onClick={onExportWorldbook}
+              className="p-1.5 bg-slate-800/40 hover:bg-slate-800 text-indigo-400 hover:text-indigo-300 border border-white/[0.05] rounded-xl click-bounce transition flex items-center justify-center"
+              title="Xuất Worldbook / Lorebook (.json)"
+            >
+              <Download size={16} />
+            </button>
+            <button 
+              onClick={onAdd}
+              className="p-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl click-bounce transition shadow-lg shadow-indigo-500/10 flex items-center justify-center"
+              title="Thêm mục mới"
+            >
+              <Plus size={16} />
+            </button>
+          </div>
         </div>
         
         <div className="relative">

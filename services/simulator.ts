@@ -1,4 +1,6 @@
 import { CharacterData, Lorebook, LorebookEntry, OpenAISettings, SimulatorMessage, RegexScript } from '../types';
+import { jsonrepair } from 'jsonrepair';
+import { normalizeOpenAiUrl } from './openai';
 
 // Helper to escape regex special characters
 function escapeRegExp(string: string) {
@@ -37,18 +39,19 @@ export const parseDecorators = (content: string): ParsedEntryContent => {
   return { decorators, ifCondition, body };
 };
 
-export const evaluateCondition = async (
-  condExpr: string,
+export const createSandboxContext = (
   characterName: string,
   userState: any,
-  helpers?: any
-): Promise<boolean> => {
-  let processedExpr = condExpr;
-  processedExpr = processedExpr.replace(/\{\{char\}\}/gi, characterName || 'Char');
-  processedExpr = processedExpr.replace(/\{\{user\}\}/gi, helpers?.userName || 'You');
-
-  const jsCode = `return Boolean(${processedExpr});`;
-
+  helpers?: {
+    getwi?: (name: any) => Promise<string>;
+    activewi?: (name: any, force?: boolean) => Promise<void>;
+    matchChatMessages?: (regex: any, options?: any) => boolean;
+    lorebook?: Lorebook;
+    chatHistory?: SimulatorMessage[];
+    userName?: string;
+    charData?: CharacterData;
+  }
+) => {
   const getvar = (path: string, options?: { defaults?: any }) => {
     const val = getNestedValue(userState, path);
     if (val === undefined && options && options.defaults !== undefined) {
@@ -61,6 +64,168 @@ export const evaluateCondition = async (
     const updated = setNestedValue(userState, path, val);
     Object.assign(userState, updated);
   };
+
+  const incvar = (path: string, val: any = 1) => {
+    const numVal = Number(val);
+    const current = Number(getvar(path, { defaults: 0 }));
+    setvar(path, current + numVal);
+  };
+
+  const decvar = (path: string, val: any = 1) => {
+    const numVal = Number(val);
+    const current = Number(getvar(path, { defaults: 0 }));
+    setvar(path, current - numVal);
+  };
+
+  const delvar = (path: string, indexOrKey?: any) => {
+    const parts = parsePath(path);
+    if (parts.length === 0) return;
+    
+    if (indexOrKey !== undefined) {
+      const parent = getNestedValue(userState, path);
+      if (parent && typeof parent === 'object') {
+        delete parent[indexOrKey];
+      }
+    } else {
+      const parentParts = parts.slice(0, -1);
+      const lastKey = parts[parts.length - 1];
+      const parent = parentParts.length === 0 ? userState : getNestedValue(userState, parentParts.join('.'));
+      if (parent && typeof parent === 'object') {
+        delete parent[lastKey];
+      }
+    }
+  };
+
+  const insvar = (path: string, val: any, indexOrKey?: any) => {
+    let current = getvar(path);
+    if (current === undefined || current === null) {
+      current = indexOrKey !== undefined && typeof indexOrKey === 'number' ? [] : {};
+      setvar(path, current);
+    }
+    
+    if (Array.isArray(current)) {
+      const idx = indexOrKey !== undefined ? Number(indexOrKey) : current.length;
+      current.splice(idx, 0, val);
+    } else if (current && typeof current === 'object') {
+      const key = indexOrKey !== undefined ? String(indexOrKey) : `key_${Object.keys(current).length}`;
+      current[key] = val;
+    }
+  };
+
+  const define = (name: string, val: any, merge?: boolean) => {
+    if (merge && typeof val === 'object') {
+      const current = getvar(name);
+      if (typeof current === 'object') {
+        setvar(name, { ...current, ...val });
+        return;
+      }
+    }
+    setvar(name, val);
+  };
+
+  const patchVariables = (path: string, changes: any[]) => {
+    if (!Array.isArray(changes)) return;
+    const target = getvar(path);
+    if (!target || typeof target !== 'object') return;
+    
+    changes.forEach((op: any) => {
+      const subpath = op.path ? op.path.split('/').filter(Boolean).join('.') : '';
+      const fullPath = subpath ? `${path}.${subpath}` : path;
+      if (op.op === 'replace' || op.op === 'add') {
+        setvar(fullPath, op.value);
+      } else if (op.op === 'remove') {
+        delvar(fullPath);
+      } else if (op.op === 'move') {
+        const fromSub = op.from ? op.from.split('/').filter(Boolean).join('.') : '';
+        const fromPath = fromSub ? `${path}.${fromSub}` : path;
+        const val = getvar(fromPath);
+        delvar(fromPath);
+        setvar(fullPath, val);
+      }
+    });
+  };
+
+  const getwi = helpers?.getwi || (async (name: any) => {
+    if (!helpers?.lorebook?.entries) return '';
+    const nameStr = String(name).trim();
+    const entry = helpers.lorebook.entries.find(e => 
+      e.comment === nameStr || 
+      String(e.uid) === nameStr || 
+      (e.key && e.key.includes(nameStr))
+    );
+    return entry ? entry.content : '';
+  });
+
+  const activewi = helpers?.activewi || (async () => {});
+
+  const getEnabledWorldInfoEntries = () => {
+    return helpers?.lorebook?.entries.filter(e => e.enabled) || [];
+  };
+
+  const getWorldInfoData = (name?: string) => {
+    return helpers?.lorebook?.entries || [];
+  };
+
+  const getchar = async (name?: string) => {
+    return {
+      name: helpers?.charData?.name || characterName || 'Char',
+      description: helpers?.charData?.description || '',
+      personality: helpers?.charData?.personality || '',
+      scenario: helpers?.charData?.scenario || '',
+      first_mes: helpers?.charData?.first_mes || '',
+      system_prompt: helpers?.charData?.system_prompt || '',
+      post_history_instructions: helpers?.charData?.post_history_instructions || '',
+      creator_notes: helpers?.charData?.creator_notes || ''
+    };
+  };
+
+  const getCharData = async (name?: string) => {
+    return getchar(name);
+  };
+
+  const getpreset = async () => '';
+  const getqr = async () => '';
+  const getQuickReplyData = () => [];
+
+  const getChatMessage = (idx: any, role?: string) => {
+    const idxNum = Number(idx);
+    const chat = helpers?.chatHistory || [];
+    const filtered = role ? chat.filter(m => m.role === role) : chat;
+    const targetIdx = idxNum < 0 ? filtered.length + idxNum : idxNum;
+    const msg = filtered[targetIdx];
+    return msg ? {
+      message: msg.content,
+      role: msg.role,
+      is_user: msg.role === 'user',
+      is_system: msg.role === 'system',
+      name: msg.role === 'user' ? 'User' : (msg.role === 'assistant' ? characterName : 'System')
+    } : null;
+  };
+
+  const getChatMessages = (start: any, end?: any, role?: string) => {
+    const chat = helpers?.chatHistory || [];
+    if (typeof start === 'number' && end === undefined && role === undefined) {
+      return chat.slice(-start).map(msg => ({
+        message: msg.content,
+        role: msg.role,
+        is_user: msg.role === 'user',
+        is_system: msg.role === 'system',
+        name: msg.role === 'user' ? 'User' : (msg.role === 'assistant' ? characterName : 'System')
+      }));
+    }
+    const filtered = role ? chat.filter(m => m.role === role) : chat;
+    const s = typeof start === 'number' ? start : 0;
+    const e = typeof end === 'number' ? end : filtered.length;
+    return filtered.slice(s, e).map(msg => ({
+      message: msg.content,
+      role: msg.role,
+      is_user: msg.role === 'user',
+      is_system: msg.role === 'system',
+      name: msg.role === 'user' ? 'User' : (msg.role === 'assistant' ? characterName : 'System')
+    }));
+  };
+
+  const matchChatMessages = helpers?.matchChatMessages || (() => false);
 
   const mockLodash = {
     get: (obj: any, path: string, defaultValue?: any) => {
@@ -83,14 +248,84 @@ export const evaluateCondition = async (
     stringify: (obj: any) => toYamlString(obj)
   };
 
+  const toastr = {
+    info: (...args: any[]) => console.info('[toastr info]', ...args),
+    success: (...args: any[]) => console.log('[toastr success]', ...args),
+    warning: (...args: any[]) => console.warn('[toastr warning]', ...args),
+    error: (...args: any[]) => console.error('[toastr error]', ...args)
+  };
+
+  const parseJSON = (text: string) => {
+    try {
+      return JSON.parse(text);
+    } catch {
+      try {
+        return JSON.parse(jsonrepair(text));
+      } catch {
+        return null;
+      }
+    }
+  };
+
+  const jsonPatch = (dest: any, changes: any[]) => {
+    if (!dest || !Array.isArray(changes)) return dest;
+    changes.forEach((op: any) => {
+      const subpath = op.path ? op.path.split('/').filter(Boolean).join('.') : '';
+      if (op.op === 'replace' || op.op === 'add') {
+        const parts = parsePath(subpath);
+        if (parts.length > 0) {
+          const updated = setNestedValue(dest, subpath, op.value);
+          Object.assign(dest, updated);
+        }
+      }
+    });
+    return dest;
+  };
+
+  const evalTemplate = async (content: string, data?: any) => {
+    const state = data || userState;
+    return evaluateTemplate(content, characterName, state, helpers);
+  };
+
+  const injectPrompt = () => {};
+  const getPromptsInjected = () => [];
+  const hasPromptsInjected = () => false;
+  const activateRegex = () => {};
+  const getSyntaxErrorInfo = () => null;
+  const execute = async () => '';
+
   const context: any = {
-    char: characterName,
-    user: helpers?.userName || 'You',
     getvar,
     setvar,
-    getwi: helpers?.getwi || (async () => ''),
-    activewi: helpers?.activewi || (async () => {}),
-    matchChatMessages: helpers?.matchChatMessages || (() => false),
+    incvar,
+    decvar,
+    delvar,
+    insvar,
+    define,
+    patchVariables,
+    getwi,
+    activewi,
+    getEnabledWorldInfoEntries,
+    getWorldInfoData,
+    getchar,
+    getCharData,
+    getpreset,
+    getqr,
+    getQuickReplyData,
+    getChatMessage,
+    getChatMessages,
+    matchChatMessages,
+    toastr,
+    alert: (...args: any[]) => console.warn('[alert]', ...args),
+    parseJSON,
+    jsonPatch,
+    evalTemplate,
+    injectPrompt,
+    getPromptsInjected,
+    hasPromptsInjected,
+    activateRegex,
+    getSyntaxErrorInfo,
+    execute,
     _: mockLodash,
     YAML: mockYAML,
     variables: userState
@@ -103,6 +338,22 @@ export const evaluateCondition = async (
       }
     });
   }
+
+  return context;
+};
+
+export const evaluateCondition = async (
+  condExpr: string,
+  characterName: string,
+  userState: any,
+  helpers?: any
+): Promise<boolean> => {
+  let processedExpr = condExpr;
+  processedExpr = processedExpr.replace(/\{\{char\}\}/gi, characterName || 'Char');
+  processedExpr = processedExpr.replace(/\{\{user\}\}/gi, helpers?.userName || 'You');
+
+  const jsCode = `return Boolean(${processedExpr});`;
+  const context = createSandboxContext(characterName, userState, helpers);
 
   try {
     const fnKeys = Object.keys(context);
@@ -122,7 +373,8 @@ const createEjsHelpers = (
   characterName: string,
   forcedActiveEntries: Set<string>,
   evaluatedContents: Map<string, string>,
-  chatHistory?: SimulatorMessage[]
+  chatHistory?: SimulatorMessage[],
+  charData?: CharacterData
 ) => {
   const getwi = async (name: any): Promise<string> => {
     if (!lorebook || !lorebook.entries) return '';
@@ -139,7 +391,6 @@ const createEjsHelpers = (
     const cached = evaluatedContents.get(String(entry.uid));
     if (cached !== undefined) return cached;
     
-    // Avoid infinite recursion by caching empty string during evaluation
     evaluatedContents.set(String(entry.uid), '');
     
     const { decorators, body } = parseDecorators(entry.content || '');
@@ -150,7 +401,8 @@ const createEjsHelpers = (
       matchChatMessages,
       lorebook,
       chatHistory,
-      userName: 'You'
+      userName: 'You',
+      charData
     });
     
     evaluatedContents.set(String(entry.uid), evaluated);
@@ -202,7 +454,7 @@ const createEjsHelpers = (
     }
   };
 
-  return { getwi, activewi, matchChatMessages };
+  return { getwi, activewi, matchChatMessages, charData };
 };
 
 /**
@@ -213,7 +465,8 @@ export const scanLorebook = async (
   lorebook: Lorebook,
   mockState: any,
   characterName: string,
-  userName: string = 'You'
+  userName: string = 'You',
+  charData?: CharacterData
 ): Promise<{ injectedEntries: LorebookEntry[]; log: string[] }> => {
   const injectedEntries: LorebookEntry[] = [];
   const log: string[] = [];
@@ -225,7 +478,7 @@ export const scanLorebook = async (
   const forcedActiveEntries = new Set<string>();
   const evaluatedContents = new Map<string, string>();
   
-  const helpers = createEjsHelpers(lorebook, mockState, characterName, forcedActiveEntries, evaluatedContents, chatHistory);
+  const helpers = createEjsHelpers(lorebook, mockState, characterName, forcedActiveEntries, evaluatedContents, chatHistory, charData);
 
   // 1. Run @@preprocessing EJS templates for all enabled entries
   log.push(`Khởi tạo tiền xử lý (Preprocessing) cho Lorebook entries...`);
@@ -240,7 +493,8 @@ export const scanLorebook = async (
           ...helpers,
           lorebook,
           chatHistory,
-          userName
+          userName,
+          charData
         });
         evaluatedContents.set(String(entry.uid), evaluated);
         log.push(`[Preprocessing] Đã chạy tiền xử lý cho mục: "${entry.comment}"`);
@@ -435,6 +689,7 @@ export const evaluateTemplate = async (
     lorebook?: Lorebook;
     chatHistory?: SimulatorMessage[];
     userName?: string;
+    charData?: CharacterData;
   }
 ): Promise<string> => {
   if (!template) return '';
@@ -448,61 +703,7 @@ export const evaluateTemplate = async (
   }
 
   const jsCode = compileEjsTemplate(processedTemplate);
-
-  const getvar = (path: string, options?: { defaults?: any }) => {
-    const val = getNestedValue(userState, path);
-    if (val === undefined && options && options.defaults !== undefined) {
-      return options.defaults;
-    }
-    return val;
-  };
-
-  const setvar = (path: string, val: any) => {
-    const updated = setNestedValue(userState, path, val);
-    Object.assign(userState, updated);
-  };
-
-  const mockLodash = {
-    get: (obj: any, path: string, defaultValue?: any) => {
-      const val = getNestedValue(obj, path);
-      return val !== undefined ? val : defaultValue;
-    },
-    random: (min: number, max: number, floating?: boolean) => {
-      if (floating) {
-        return Math.random() * (max - min) + min;
-      }
-      return Math.floor(Math.random() * (max - min + 1)) + min;
-    },
-    sample: (arr: any[]) => {
-      if (!Array.isArray(arr) || arr.length === 0) return undefined;
-      return arr[Math.floor(Math.random() * arr.length)];
-    }
-  };
-
-  const mockYAML = {
-    stringify: (obj: any) => toYamlString(obj)
-  };
-
-  const context: any = {
-    char: characterName,
-    user: helpers?.userName || 'You',
-    getvar,
-    setvar,
-    getwi: helpers?.getwi || (async () => ''),
-    activewi: helpers?.activewi || (async () => {}),
-    matchChatMessages: helpers?.matchChatMessages || (() => false),
-    _: mockLodash,
-    YAML: mockYAML,
-    variables: userState
-  };
-
-  if (userState && typeof userState === 'object') {
-    Object.entries(userState).forEach(([key, val]) => {
-      if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key)) {
-        context[key] = val;
-      }
-    });
-  }
+  const context = createSandboxContext(characterName, userState, helpers);
 
   try {
     const fnKeys = Object.keys(context);
@@ -863,20 +1064,21 @@ export const buildSillyTavernPrompt = async (
   const charName = charData.name || 'Char';
 
   // Evaluate templates inside character attributes
-  const description = await evaluateTemplate(charData.description || '', charName, mockState);
-  const personality = await evaluateTemplate(charData.personality || '', charName, mockState);
-  const scenario = await evaluateTemplate(charData.scenario || '', charName, mockState);
-  const sysPromptInput = await evaluateTemplate(charData.system_prompt || '', charName, mockState);
-  const mesExample = await evaluateTemplate(charData.mes_example || '', charName, mockState);
-  const creatorNotes = await evaluateTemplate(charData.creator_notes || '', charName, mockState);
-  const postHistoryInstructions = await evaluateTemplate(charData.post_history_instructions || '', charName, mockState);
+  const helpers = { charData, userName: 'You' };
+  const description = await evaluateTemplate(charData.description || '', charName, mockState, helpers);
+  const personality = await evaluateTemplate(charData.personality || '', charName, mockState, helpers);
+  const scenario = await evaluateTemplate(charData.scenario || '', charName, mockState, helpers);
+  const sysPromptInput = await evaluateTemplate(charData.system_prompt || '', charName, mockState, helpers);
+  const mesExample = await evaluateTemplate(charData.mes_example || '', charName, mockState, helpers);
+  const creatorNotes = await evaluateTemplate(charData.creator_notes || '', charName, mockState, helpers);
+  const postHistoryInstructions = await evaluateTemplate(charData.post_history_instructions || '', charName, mockState, helpers);
 
   // Group injected lorebook entries
   const compileEntries = async (pos: string): Promise<string> => {
     const filtered = injectedEntries.filter(e => e.position === pos);
     const compiledList: string[] = [];
     for (const e of filtered) {
-      const evaluated = await evaluateTemplate(e.content || '', charName, mockState);
+      const evaluated = await evaluateTemplate(e.content || '', charName, mockState, helpers);
       compiledList.push(`[Lorebook: ${e.comment}]\n${evaluated}`);
     }
     return compiledList.join('\n\n');
@@ -1083,7 +1285,11 @@ export const extractJsonPatchFromText = (text: string): { patches: any[]; log: s
   if (jsonPatchMatch) {
     try {
       const rawJson = jsonPatchMatch[1].trim();
-      const parsed = JSON.parse(rawJson);
+      let repaired = rawJson;
+      try {
+        repaired = jsonrepair(rawJson);
+      } catch (e) {}
+      const parsed = JSON.parse(repaired);
       if (Array.isArray(parsed)) {
         patches.push(...parsed);
         log = 'Tìm thấy thẻ <JSONPatch> hợp lệ.';
@@ -1100,7 +1306,11 @@ export const extractJsonPatchFromText = (text: string): { patches: any[]; log: s
     if (matches && matches.length > 0) {
       for (const m of matches) {
         try {
-          const parsed = JSON.parse(m);
+          let repaired = m;
+          try {
+            repaired = jsonrepair(m);
+          } catch (e) {}
+          const parsed = JSON.parse(repaired);
           if (Array.isArray(parsed) && parsed.some(op => op.op && op.path)) {
             patches.push(...parsed);
             log = 'Trích xuất JSON Patch thành công từ nội dung văn bản.';
@@ -1131,12 +1341,7 @@ export const sendSimulatorMessage = async (
   userName: string = 'You',
   onProgress?: (partialContent: string) => void
 ): Promise<string> => {
-  let url = settings.baseUrl.endsWith('/') ? settings.baseUrl : `${settings.baseUrl}/`;
-  if (!url.includes('/v1/')) {
-    url = `${url}v1/chat/completions`;
-  } else {
-    url = `${url}chat/completions`;
-  }
+  const url = normalizeOpenAiUrl(settings.baseUrl, 'chat/completions');
 
   const cleanSystemPrompt = applyRegexByPlacement(systemPrompt, regexScripts, 2, { charName, userName, isApiPrompt: true });
   const cleanPostHistoryInstructions = postHistoryInstructions

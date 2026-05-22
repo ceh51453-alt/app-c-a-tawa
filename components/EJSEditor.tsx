@@ -48,8 +48,8 @@ export function validateEjsCode(code: string): string[] {
       warnings.push(`Khối EJS số ${blockIndex} có dấu ngoặc đơn '(' (${openParens}) và ')' (${closeParens}) không khớp.`);
     }
 
-    // Check missing await for async calls: getwi, executeSlashCommands, sendMessage
-    const asyncRegex = /\b(getwi|executeSlashCommands|sendMessage)\s*\(/g;
+    // Check missing await for async calls: getwi, activewi, getchar, getCharData, getpreset, getqr, execute, executeSlashCommands, sendMessage
+    const asyncRegex = /\b(getwi|activewi|getchar|getCharData|getpreset|getqr|execute|executeSlashCommands|sendMessage)\s*\(/g;
     let asyncMatch;
     while ((asyncMatch = asyncRegex.exec(blockContent)) !== null) {
       const funcName = asyncMatch[1];

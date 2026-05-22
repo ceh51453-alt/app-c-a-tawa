@@ -56,6 +56,7 @@ export interface OpenAISettings {
   nsfw: boolean;
   enableSearch: boolean;
   minTokens: number; // Target length enforcement
+  enablePlanning?: boolean; // Planning & Approval Mode toggle
 }
 
 export interface AIModel {
@@ -89,6 +90,8 @@ export interface ChatMessage {
   dictActions?: DictionaryAction[];
   isError?: boolean;
   isHidden?: boolean; // Used to hide large data payloads from UI
+  approvalStatus?: 'pending' | 'approved' | 'rejected';
+  aiStatus?: 'CONTINUE' | 'DONE';
 }
 
 export interface WorldbuildingAction {

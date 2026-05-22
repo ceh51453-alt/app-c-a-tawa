@@ -757,7 +757,7 @@ export const CardPreview: React.FC<CardPreviewProps> = ({ project, settings }) =
     setIsGenerating(true);
 
     // 2. Scan Lorebook
-    const { injectedEntries, log: scanLogs } = await scanLorebook(updatedHistory, project.lorebook, mockState, project.charData.name || 'Char', 'You');
+    const { injectedEntries, log: scanLogs } = await scanLorebook(updatedHistory, project.lorebook, mockState, project.charData.name || 'Char', 'You', project.charData);
     scanLogs.forEach(sLog => {
       setLogs(prev => [...prev, `[${timestamp}] ${sLog}`]);
     });

@@ -132,6 +132,42 @@ function getRAGContext(query: string, project: CardProject): string {
   }
 }
 
+/**
+ * Normalize OpenRouter / OpenAI / Proxy baseUrl endpoints robustly.
+ */
+export const normalizeOpenAiUrl = (baseUrl: string, endpoint: 'chat/completions' | 'models'): string => {
+  let url = (baseUrl || '').trim();
+  url = url.replace(/\/+$/, ''); // Remove trailing slashes
+  
+  if (url.endsWith('/' + endpoint)) {
+    return url;
+  }
+  
+  // Also handle cases where user specified chat/completions but we are querying models or vice versa
+  if (endpoint === 'models' && url.endsWith('/chat/completions')) {
+    url = url.substring(0, url.length - '/chat/completions'.length);
+    url = url.replace(/\/+$/, '');
+  } else if (endpoint === 'chat/completions' && url.endsWith('/models')) {
+    url = url.substring(0, url.length - '/models'.length);
+    url = url.replace(/\/+$/, '');
+  }
+
+  url = `${url}/`;
+  if (endpoint === 'models') {
+    if (!url.includes('/v1/')) {
+      return `${url}v1/models`;
+    } else {
+      return `${url}models`;
+    }
+  } else {
+    if (!url.includes('/v1/')) {
+      return `${url}v1/chat/completions`;
+    } else {
+      return `${url}chat/completions`;
+    }
+  }
+};
+
 /** Dictionary enforcement instruction - appended to all prompts */
 const DICTIONARY_ENFORCEMENT = `
 <DICTIONARY_ENFORCEMENT_PROTOCOL>
@@ -147,13 +183,7 @@ Nếu card có Từ Điển Biến Số (MVU_DICTIONARY_RULES), bạn PHẢI:
 `;
 
 export const fetchModels = async (baseUrl: string, apiKey: string): Promise<AIModel[]> => {
-  let url = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
-  // Handle common proxy path variations
-  if (!url.includes('/v1/')) {
-    url = `${url}v1/models`;
-  } else {
-    url = `${url}models`;
-  }
+  const url = normalizeOpenAiUrl(baseUrl, 'models');
 
   try {
     const response = await fetch(url, {
@@ -351,12 +381,7 @@ export const generateContent = async (
   onProgress?: (partialContent: string) => void
 ): Promise<Partial<LorebookEntry>> => {
   const targetTokens = settings.minTokens || minTokens;
-  let url = settings.baseUrl.endsWith('/') ? settings.baseUrl : `${settings.baseUrl}/`;
-   if (!url.includes('/v1/')) {
-    url = `${url}v1/chat/completions`;
-  } else {
-    url = `${url}chat/completions`;
-  }
+  const url = normalizeOpenAiUrl(settings.baseUrl, 'chat/completions');
 
   // SỬ DỤNG TAWA PERSONA VÀ THÊM LUẬT CẤM XUẤT HIỆN TRONG CONTENT
   // SUPER-STRICT TOKEN ENFORCEMENT
@@ -484,12 +509,7 @@ export const translateEntry = async (
   settings: OpenAISettings
 ): Promise<Partial<LorebookEntry>> => {
   await rateLimitGuard();
-  let url = settings.baseUrl.endsWith('/') ? settings.baseUrl : `${settings.baseUrl}/`;
-  if (!url.includes('/v1/')) {
-    url = `${url}v1/chat/completions`;
-  } else {
-    url = `${url}chat/completions`;
-  }
+  const url = normalizeOpenAiUrl(settings.baseUrl, 'chat/completions');
 
   const nsfwInstruction = settings.nsfw 
     ? `
@@ -585,12 +605,7 @@ export const worldbuildingChat = async (
   minTokens: number = 2000,
   mode: WorldbuildingMode = 'genesis'
 ): Promise<WorldbuildingResponse> => {
-  let url = settings.baseUrl.endsWith('/') ? settings.baseUrl : `${settings.baseUrl}/`;
-  if (!url.includes('/v1/')) {
-    url = `${url}v1/chat/completions`;
-  } else {
-    url = `${url}chat/completions`;
-  }
+  const url = normalizeOpenAiUrl(settings.baseUrl, 'chat/completions');
 
   // Fallback if minTokens is not set in settings
   const targetTokens = settings.minTokens || minTokens;
@@ -775,14 +790,14 @@ Respond with a VALID JSON object:
 <MVU_ZOD_AUTOMATION_PROTOCOL>
 If the user asks you to create or convert the card to an "MVU Zod" (hoặc thẻ MVU Zod hoàn chỉnh), you MUST output ALL of the following actions in ONE turn:
 1. {"type": "set_project_type", "project_type": "mvu_zod"}
-2. {"type": "update_zod_schema", "zod_schema": "MÃ JAVASCRIPT ZOD SCHEMA Ở ĐÂY (Tuân thủ Zod 4: z.coerce.number(), .prefault()) -> BẮT BUỘC VIẾT CỰC KỲ DÀI, TOÀN DIỆN, CHI TIẾT (Ít nhất 15-20+ biến lồng nhau lồng vào các danh mục như Người_Chơi, Thế_Giới, Vật_Phẩm, Kỹ_Năng, Trạng_Thái, v.v.)"}
+2. {"type": "update_zod_schema", "zod_schema": "import { registerMvuSchema } from 'https://testingcf.jsdelivr.net/gh/StageDog/tavern_resource/dist/util/mvu_zod.js';\\n\\nexport const schema = z.object({ ...MÃ SCHEMA CỰC KỲ CHI TIẾT Ở ĐÂY... });\\n\\n$(() => {\\n  registerMvuSchema(schema);\\n}); -> (Tuân thủ Zod 4: z.coerce.number(), .prefault()) BẮT BUỘC VIẾT CỰC KỲ DÀI, TOÀN DIỆN, CHI TIẾT (Ít nhất 15-20+ biến lồng nhau lồng vào các danh mục như Người_Chơi, Thế_Giới, Vật_Phẩm, Kỹ_Năng, Trạng_Thái, v.v.)"}
 3. {"type": "create_regex", "regex_data": {"scriptName": "Ẩn keyword trigger", "findRegex": "youyujun233", "replaceString": "", "promptOnly": true, "isactive": true, "markdownOnly": false, "runOnEdit": true, "substituteRegex": 0, "placement": [2]}}
 4. {"type": "create_regex", "regex_data": {"scriptName": "Ẩn update tags", "findRegex": "<UpdateVariable>[\\s\\S]*?</UpdateVariable>", "replaceString": "", "promptOnly": true, "isactive": true, "markdownOnly": false, "runOnEdit": true, "substituteRegex": 0, "placement": [2]}}
 5. {"type": "create_regex", "regex_data": {"scriptName": "Đang cập nhật biến", "findRegex": "/<update(?:variable)?>(?!.*<\\/update(?:variable)?>)\\s*([\\s\\S]*?)$/gsi", "replaceString": "<div class=\\"mvu-updating-box\\">...Đang cập nhật biến...</div>", "promptOnly": false, "isactive": true, "markdownOnly": true, "runOnEdit": false, "substituteRegex": 0, "placement": [2]}}
 6. {"type": "create_regex", "regex_data": {"scriptName": "Cập nhật xong", "findRegex": "/<update(?:variable)?>\\s*([\\s\\S]*?)\\s*<\\/update(?:variable)?>/gsi", "replaceString": "<div class=\\"mvu-success-box\\">✅ Cập nhật hoàn tất</div>", "promptOnly": false, "isactive": true, "markdownOnly": true, "runOnEdit": false, "substituteRegex": 0, "placement": [2]}}
 7. {"type": "create", "data": {"comment": "[initvar]Khởi tạo biến", "content": "MÃ YAML KHỞI TẠO BIẾN", "enabled": false, "constant": true, "position": "before_char", "order": 0}}
 8. {"type": "create", "data": {"comment": "Danh sách biến số", "content": "---\n<status_current_variables>\n{{format_message_variable::stat_data}}\n</status_current_variables>", "enabled": true, "position": "after_char", "order": 999}}
-9. {"type": "create", "data": {"comment": "[mvu_update] Quy tắc cập nhật biến", "key": ["[mvu_update] Quy tắc cập nhật biến"], "content": "---\nquy tắc cập nhật biến:\n  Người Chơi:\n    Trạng Thái:\n      type: string\n      check: Cập nhật khi thay đổi trạng thái.\n  (BỔ SUNG THÊM CÁC QUY TẮC DỰA TRÊN ZOD SCHEMA CỦA BẠN)", "enabled": true, "position": "after_char", "order": 200}}
+9. {"type": "create", "data": {"comment": "[mvu_update] Quy tắc cập nhật biến", "key": ["[mvu_update] Quy tắc cập nhật biến"], "content": "---\nquy tắc cập nhật biến:\n  (BẮT BUỘC KHAI BÁO đầy đủ 100% tất cả các trường/biến có trong Zod Schema theo dạng cây phân cấp. Với từng biến con cuối cùng, cung cấp chi tiết: 'type' và 'check' ghi rõ điều kiện kích hoạt/cập nhật để bất kỳ AI nào đọc cũng hiểu và cập nhật đúng/hết biến, không để sót biến nào. TUYỆT ĐỐI CẤM dùng placeholder hay viết chung chung)", "enabled": true, "position": "after_char", "order": 200}}
 10. {"type": "create", "data": {"comment": "[mvu_update] Quy tắc cập nhật biến số định dạng", "key": ["[mvu_update] Định dạng xuất biến"], "content": "---\nđịnh dạng xuất biến:\n  rule:\n    - you must output the update analysis and the actual update commands at once in the end of the next reply\n    - the update commands works like the **JSON Patch (RFC 6902)** standard, must be a valid JSON array containing operation objects, but supports the following operations instead:\n      - replace: replace the value of existing paths (absolute set)\n      - delta: update the value of existing number paths by a positive/negative delta value (numerical incremental adjust)\n      - insert: insert new items into an object or array (using \`-\` as array index intends appending to the end)\n      - remove: remove an existing path or item\n    - don't update field names starting with \`_\` (readonly fields)\n    - [History context check]: Before writing updates, scan prior messages for events reflecting these changes. If already processed, do NOT apply redundant updates.\n  format: |-\n    <UpdateVariable>\n    <Analysis>$(IN ENGLISH, no more than 80 words)\n    - \${calculate time passed: ...}\n    - \${history check: check if the variable change was already processed in previous messages}\n    - \${analyze every variable based on its corresponding check: ...}\n    </Analysis>\n    <JSONPatch>\n    [\n      { \"op\": \"replace\", \"path\": \"/Người Chơi/Vị Trí\", \"value\": \"Hào Châu\" },\n      { \"op\": \"delta\", \"path\": \"/Người Chơi/Tài Sản Chính/Bạc Vụn\", \"value\": -10 }\n    ]\n    </JSONPatch>\n    </UpdateVariable>", "enabled": true, "position": "after_char", "order": 190}}
 11. {"type": "update_mvu_dictionary", "mvu_dictionary": "Liệt kê và giải thích chi tiết ý nghĩa của toàn bộ các biến số, chỉ số, vật phẩm có trong Zod Schema. Điều này giúp hệ thống theo dõi và tuân thủ chặt chẽ các biến số trong suốt quá trình hoạt động."}
 
@@ -792,6 +807,16 @@ If the user asks you to create or convert the card to an "MVU Zod" (hoặc thẻ
    - Mọi trigger key (trường \`key\`) trong các lorebook entry cập nhật \`[mvu_update]\` (như Quy tắc cập nhật biến, Định dạng xuất biến) bắt buộc phải có độ dài **lớn hơn 10 ký tự** (Ví dụ: \`["[mvu_update] Quy tắc cập nhật biến"]\`, \`["[mvu_update] Định dạng xuất biến"]\`).
    - TUYỆT ĐỐI CẤM sử dụng các keyword ngắn dưới 10 ký tự (như \`mvu\`, \`update\`, \`mvu_update\`, \`upvar\`, \`variable\`) làm trigger key cho các entry này, vì chúng sẽ gây kích hoạt nhầm hoặc không chính xác trong SillyTavern. Tất cả các key trong mảng \`key\` của các entry \`[mvu_update]\` đều phải thỏa mãn điều kiện dài hơn 10 ký tự.
 3. **CẤM RÚT GỌN (FORBIDDEN TO SHORTEN)**: Dù trong trường hợp nào, khi viết Zod Schema hoặc Lorebook Entry, bạn tuyệt đối không được viết tắt, thu gọn hoặc tóm tắt.
+4. **CẤU TRÚC WRAPPER BẮT BUỘC CHO ZOD SCHEMA**:
+   - TRÊN CÙNG của mã nguồn schema BẮT BUỘC phải có đúng dòng import này: \`import { registerMvuSchema } from 'https://testingcf.jsdelivr.net/gh/StageDog/tavern_resource/dist/util/mvu_zod.js';\`
+   - DƯỚI CÙNG của mã nguồn schema BẮT BUỘC phải có đoạn mã đăng ký này: \`$(() => { registerMvuSchema(schema); })\` (với 'schema' là tên biến export của bạn). Mẫu chuẩn:
+   \`\`\`javascript
+   import { registerMvuSchema } from 'https://testingcf.jsdelivr.net/gh/StageDog/tavern_resource/dist/util/mvu_zod.js';
+   export const schema = z.object({ ... });
+   $(() => { registerMvuSchema(schema); })
+   \`\`\`
+5. **Đồng biến tuyệt đối giữa Regex và Schema (Regex-Schema Synchronization)**: Tất cả các đường dẫn biến số được sử dụng trong các đoạn mã Regex script (nếu có render giao diện, trích xuất dữ liệu, hoặc tương tác người dùng) và cấu trúc biến của Zod Schema phải đồng biến/trùng khớp 100%. Khi chỉnh sửa/thêm bớt biến trong Zod Schema, bạn phải rà soát và cập nhật đồng bộ đường dẫn tương ứng trong các Regex Scripts (đảm bảo không bị lệch đường dẫn, ví dụ: \`/Người Chơi/HP\` trong Schema phải khớp với đường dẫn gọi ở giao diện/Regex).
+6. **Sơ đồ quy tắc cập nhật biến đầy đủ (Exhaustive MVU Update Rules)**: Trong entry \`[mvu_update] Quy tắc cập nhật biến\`, bạn BẮT BUỘC phải viết mã YAML liệt kê đầy đủ 100% tất cả các biến đã khai báo trong Zod Schema dưới dạng sơ đồ phân cấp. Mỗi biến con cuối cùng (leaf node) phải có trường \`type\` (kiểu dữ liệu) và \`check\` (hướng dẫn chi tiết, dễ hiểu bằng tiếng Việt về logic khi nào cần cập nhật/thay đổi trị số). Hướng dẫn này phải rõ ràng đến mức bất kỳ AI/LLM nào đọc cũng hiểu chính xác và cập nhật đầy đủ, chính xác, không bỏ sót bất kỳ biến nào trong Zod Schema. Tuyệt đối KHÔNG sử dụng các dòng ghi chú chung chung hoặc placeholder kiểu như "(bổ sung thêm...)".
 
 **IMPORTANT: DO NOT use "seed_regex" action. DO NOT create a "Dashboard UI" or "Game Dashboard" regex script. The user will design their own UI later. Only create the 4 essential regex scripts above.**
 </MVU_ZOD_AUTOMATION_PROTOCOL>
@@ -895,12 +920,7 @@ export const regexBuilderChat = async (
   chatHistory: ChatMessage[],
   onProgress?: (partialContent: string) => void
 ): Promise<RegexBuilderResponse> => {
-  let url = settings.baseUrl.endsWith('/') ? settings.baseUrl : `${settings.baseUrl}/`;
-  if (!url.includes('/v1/')) {
-    url = `${url}v1/chat/completions`;
-  } else {
-    url = `${url}chat/completions`;
-  }
+  const url = normalizeOpenAiUrl(settings.baseUrl, 'chat/completions');
 
   const currentRegexScripts = project.regexScripts;
   const contextSummary = currentRegexScripts.map(r => ({
@@ -986,12 +1006,7 @@ export const ejsBuilderChat = async (
   chatHistory: ChatMessage[],
   onProgress?: (partialContent: string) => void
 ): Promise<EJSBuilderResponse> => {
-  let url = settings.baseUrl.endsWith('/') ? settings.baseUrl : `${settings.baseUrl}/`;
-  if (!url.includes('/v1/')) {
-    url = `${url}v1/chat/completions`;
-  } else {
-    url = `${url}chat/completions`;
-  }
+  const url = normalizeOpenAiUrl(settings.baseUrl, 'chat/completions');
 
   const currentEjsTemplate = project.charData.ejs_template || '';
   const ragContext = getRAGContext(userMessage, project);
@@ -1060,12 +1075,7 @@ export const generateMvuDictionary = async (
   settings: OpenAISettings,
   onProgress?: (partialContent: string) => void
 ): Promise<string> => {
-  let url = settings.baseUrl.endsWith('/') ? settings.baseUrl : `${settings.baseUrl}/`;
-  if (!url.includes('/v1/')) {
-    url = `${url}v1/chat/completions`;
-  } else {
-    url = `${url}chat/completions`;
-  }
+  const url = normalizeOpenAiUrl(settings.baseUrl, 'chat/completions');
 
   const targetTokens = settings.minTokens || 2000;
   const systemPrompt = getTawaPersona(settings.nsfw) + `
@@ -1493,12 +1503,7 @@ export const characterEditorChat = async (
   chatHistory: ChatMessage[],
   onProgress?: (partialContent: string) => void
 ): Promise<CharacterEditorResponse> => {
-  let url = settings.baseUrl.endsWith('/') ? settings.baseUrl : `${settings.baseUrl}/`;
-  if (!url.includes('/v1/')) {
-    url = `${url}v1/chat/completions`;
-  } else {
-    url = `${url}chat/completions`;
-  }
+  const url = normalizeOpenAiUrl(settings.baseUrl, 'chat/completions');
 
   const ragContext = getRAGContext(userMessage, project);
   const cardContext = buildCardProjectContext(project, { skipCharData: true });
@@ -1602,12 +1607,7 @@ export const entryEditorChat = async (
   chatHistory: ChatMessage[],
   onProgress?: (partialContent: string) => void
 ): Promise<EntryEditorResponse> => {
-  let url = settings.baseUrl.endsWith('/') ? settings.baseUrl : `${settings.baseUrl}/`;
-  if (!url.includes('/v1/')) {
-    url = `${url}v1/chat/completions`;
-  } else {
-    url = `${url}chat/completions`;
-  }
+  const url = normalizeOpenAiUrl(settings.baseUrl, 'chat/completions');
 
   const ragContext = getRAGContext(userMessage, project);
   const cardContext = buildCardProjectContext(project, { skipLorebook: true, fullLorebookEntry: currentEntry });
@@ -1713,12 +1713,7 @@ export const dictionaryChatService = async (
   chatHistory: ChatMessage[],
   onProgress?: (partialContent: string) => void
 ): Promise<DictionaryResponse> => {
-  let url = settings.baseUrl.endsWith('/') ? settings.baseUrl : `${settings.baseUrl}/`;
-  if (!url.includes('/v1/')) {
-    url = `${url}v1/chat/completions`;
-  } else {
-    url = `${url}chat/completions`;
-  }
+  const url = normalizeOpenAiUrl(settings.baseUrl, 'chat/completions');
 
   const ragContext = getRAGContext(userMessage, project);
   const cardContext = buildCardProjectContext(project, { skipZod: true, skipDictionary: true });

@@ -418,7 +418,8 @@ export const importLegacyLorebook = (jsonStr: string): Lorebook => {
   const parsed = JSON.parse(jsonStr);
   
   // Check if this is a SillyTavern character book or legacy exports
-  const entriesSrc = parsed.entries || (parsed.character_book?.entries) || [];
+  const entriesRaw = parsed.entries || (parsed.character_book?.entries) || [];
+  const entriesSrc = Array.isArray(entriesRaw) ? entriesRaw : Object.values(entriesRaw);
   
   const entries: LorebookEntry[] = entriesSrc.map((entry: any, index: number) => {
     const ext = entry.extensions || {};
@@ -519,4 +520,63 @@ export const exportZodSchemaAsLorebook = (zod_schema: string, charName: string):
   };
 
   return JSON.stringify(stLorebook, null, 2);
+};
+
+// Export standalone Worldbook / Lorebook JSON format
+export const exportStandaloneLorebook = (project: CardProject): string => {
+  const stEntries = project.lorebook.entries.map((entry, idx) => {
+    return {
+      id: entry.uid,
+      keys: entry.key,
+      secondary_keys: entry.secondary_keys || [],
+      comment: entry.comment,
+      content: entry.content,
+      name: "",
+      constant: entry.constant,
+      selective: entry.selective,
+      insertion_order: entry.order,
+      enabled: entry.enabled,
+      position: entry.position,
+      use_regex: true,
+      extensions: {
+        position: positionToNumber(entry.position),
+        exclude_recursion: entry.non_recursable ?? false,
+        display_index: idx,
+        probability: entry.probability ?? 100,
+        useProbability: true,
+        depth: entry.scan_depth ?? 4,
+        selectiveLogic: entry.key_logic === 'and_any' ? 0 : entry.key_logic === 'and_all' ? 1 : entry.key_logic === 'not_any' ? 2 : 3,
+        outlet_name: "",
+        group: "",
+        group_override: false,
+        group_weight: entry.probability ?? 100,
+        prevent_recursion: entry.prevent_recursion ?? false,
+        delay_until_recursion: entry.delay_until_recursion ?? false,
+        scan_depth: entry.scan_depth ?? 4,
+        match_whole_words: entry.match_whole_words ?? true,
+        use_group_scoring: false,
+        case_sensitive: entry.case_sensitive ?? false,
+        automation_id: "",
+        role: 0,
+        vectorized: entry.vectorized ?? false,
+        sticky: entry.sticky ?? 0,
+        cooldown: entry.cooldown ?? 0,
+        delay: entry.delay ?? 0,
+        match_persona_description: false,
+        match_character_description: false,
+        match_character_personality: false,
+        match_character_depth_prompt: false,
+        match_scenario: false,
+        match_creator_notes: false,
+        triggers: [],
+        ignore_budget: entry.ignore_budget ?? false
+      }
+    };
+  });
+
+  return JSON.stringify({
+    name: project.lorebook.name || `${project.charData.name} Worldbook`,
+    description: project.lorebook.description || "",
+    entries: stEntries
+  }, null, 2);
 };

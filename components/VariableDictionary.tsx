@@ -8,6 +8,7 @@ import {
   AlertTriangle, ArrowRight, Play, Info, Check, MessageSquare, MessageSquareOff
 } from 'lucide-react';
 import { TawaInlineChat } from './TawaInlineChat';
+import { validateSchemaRegexCovariance, addVariableToSchemaText } from '../services/validator';
 
 interface VariableDictionaryProps {
   project: CardProject;
@@ -30,36 +31,52 @@ export function parseZodSchema(schemaText: string): ExtractedVariable[] {
   if (!schemaText) return vars;
 
   const lines = schemaText.split('\n');
-  const stack: string[] = [];
-  
+  const stack: { key: string; depth: number }[] = [];
+  let currentDepth = 0;
+
   for (let line of lines) {
-    line = line.trim();
-    if (!line) continue;
-    
-    // Check if we are opening a z.object
-    const objectMatch = line.match(/^([\w\u00C0-\u1EF9\u4e00-\u9fa5]+|['"][\s\S]+?['"])\s*:\s*z\s*\.\s*object\s*\(\s*\{/);
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // Clean comments and strings from line to avoid counting braces inside them
+    let cleaned = trimmed.replace(/\/\/.*$/g, '');
+    cleaned = cleaned.replace(/"([^"\\]|\\.)*"/g, '""');
+    cleaned = cleaned.replace(/'([^'\\]|\\.)*'/g, "''");
+    cleaned = cleaned.replace(/`([^`\\]|\\.)*`/g, "''");
+
+    // Process brace depth changes char by char
+    for (let i = 0; i < cleaned.length; i++) {
+      const char = cleaned[i];
+      if (char === '{') {
+        currentDepth++;
+      } else if (char === '}') {
+        currentDepth--;
+        // Pop any stack levels that are deeper than the current depth
+        while (stack.length > 0 && stack[stack.length - 1].depth > currentDepth) {
+          stack.pop();
+        }
+      }
+    }
+
+    // Check if we are opening a z.object: e.g. key: z.object({
+    const objectMatch = trimmed.match(/^([\w\u00C0-\u1EF9\u4e00-\u9fa5]+|['"][\s\S]+?['"])\s*:\s*z\s*\.\s*object\s*\(\s*\{/);
     if (objectMatch) {
       const rawKey = objectMatch[1];
-      const key = rawKey.replace(/['"]/g, ''); // strip quotes
-      stack.push(key);
+      const key = rawKey.replace(/['"]/g, '');
+      // Push this key along with current depth (which includes the '{' on this line)
+      stack.push({ key, depth: currentDepth });
       continue;
     }
-    
-    // Check if we are closing a z.object
-    if (line.startsWith('}') || line.startsWith('})')) {
-      stack.pop();
-      continue;
-    }
-    
-    // Check for a leaf property
-    const leafMatch = line.match(/^([\w\u00C0-\u1EF9\u4e00-\u9fa5]+|['"][\s\S]+?['"])\s*:\s*z\s*\.\s*(.+)$/);
+
+    // Check for a leaf property: e.g. key: z.string() or key: z.number().prefault(1)
+    const leafMatch = trimmed.match(/^([\w\u00C0-\u1EF9\u4e00-\u9fa5]+|['"][\s\S]+?['"])\s*:\s*z\s*\.\s*(.+)$/);
     if (leafMatch) {
       const rawKey = leafMatch[1];
       const key = rawKey.replace(/['"]/g, '');
       const definition = leafMatch[2];
-      
-      const fullPath = [...stack, key].join('.');
-      
+
+      const fullPath = stack.map(s => s.key).concat(key).join('.');
+
       // Determine type
       let type = 'unknown';
       if (definition.includes('number')) {
@@ -70,19 +87,21 @@ export function parseZodSchema(schemaText: string): ExtractedVariable[] {
         type = 'boolean';
       } else if (definition.includes('array')) {
         type = 'array';
+      } else if (definition.includes('object')) {
+        type = 'object';
       }
-      
+
       // Extract default value from .prefault(...) or .default(...)
       let defaultValue = '';
       const prefaultMatch = definition.match(/\.prefault\(([^)]*)\)/);
       const defaultMatch = definition.match(/\.default\(([^)]*)\)/);
-      
+
       if (prefaultMatch) {
         defaultValue = prefaultMatch[1].trim();
       } else if (defaultMatch) {
         defaultValue = defaultMatch[1].trim();
       }
-      
+
       vars.push({
         path: fullPath,
         type,
@@ -91,7 +110,7 @@ export function parseZodSchema(schemaText: string): ExtractedVariable[] {
       });
     }
   }
-  
+
   return vars;
 }
 
@@ -104,7 +123,7 @@ export function parseDescriptions(dictionaryText: string): Record<string, string
   for (const line of lines) {
     const trimmed = line.trim();
     // Matches: "- stat_data.X: description" or "- `stat_data.X`: description" or "* stat_data.X - description"
-    const match = trimmed.match(/^[-*+]\s+(?:`?)([\w\u00C0-\u1EF9\u4e00-\u9fa5.]+)(?:`?)\s*[:|-]\s*(.+)$/);
+    const match = trimmed.match(/^[-*+]\s+`?([\w\u00C0-\u1EF9\u4e00-\u9fa5\s.-]+)`?\s*[:|-]\s*(.+)$/);
     if (match) {
       const path = match[1].trim();
       const desc = match[2].trim();
@@ -128,9 +147,35 @@ export const VariableDictionary: React.FC<VariableDictionaryProps> = ({
   const [streamBuffer, setStreamBuffer] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [showChat, setShowChat] = useState(true);
+  const [subTab, setSubTab] = useState<'glossary' | 'covariance'>('glossary');
 
   const dictionaryText = project.charData.mvu_dictionary || '';
   const zodSchema = project.charData.zod_schema || '';
+
+  const { errors, warnings } = validateSchemaRegexCovariance(project);
+
+  const handleQuickFix = (path: string, type: string) => {
+    const updatedSchema = addVariableToSchemaText(zodSchema, path, type);
+    onChange({
+      ...project.charData,
+      zod_schema: updatedSchema
+    });
+  };
+
+  const handleSyncAll = () => {
+    let updatedSchema = zodSchema;
+    const uniqueErrors = errors.filter((err, idx, self) =>
+      self.findIndex(e => e.path === err.path) === idx
+    );
+    uniqueErrors.forEach(err => {
+      updatedSchema = addVariableToSchemaText(updatedSchema, err.path, err.type);
+    });
+    onChange({
+      ...project.charData,
+      zod_schema: updatedSchema
+    });
+    alert(`Đã tự động đồng bộ hóa thêm ${uniqueErrors.length} biến mới vào Zod Schema.`);
+  };
 
   // Synchronize extracted variables when schema or dictionary updates
   useEffect(() => {
@@ -291,93 +336,211 @@ export const VariableDictionary: React.FC<VariableDictionaryProps> = ({
     <div className="flex flex-1 h-full min-h-0 bg-[#04060f] overflow-hidden">
       {/* Left Column: Visual Glossary & Stats */}
       <div className="flex-1 flex flex-col h-full border-r border-white/[0.04] p-5 space-y-4 overflow-y-auto custom-scrollbar">
-        <div className="flex justify-between items-center shrink-0">
-          <div className="flex items-center gap-2.5">
-            <BookOpen className="w-5 h-5 text-indigo-400" />
-            <h3 className="font-bold text-slate-200 text-xs tracking-wider uppercase">Từ Điển Biến Số Trực Quan</h3>
-          </div>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setShowChat(!showChat)}
-              className={`p-1.5 rounded-lg border transition-all click-bounce ${
-                showChat
-                  ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/20'
-                  : 'bg-slate-800/40 border-white/[0.05] text-slate-500 hover:text-slate-300'
-              }`}
-              title={showChat ? 'Ẩn Tawa AI Chat' : 'Hiện Tawa AI Chat'}
-            >
-              {showChat ? <MessageSquare size={14} /> : <MessageSquareOff size={14} />}
-            </button>
-            <Button variant="ghost" size="xs" onClick={handleExtractFromSchema} className="flex items-center gap-1 text-[10px]">
-              <RefreshCw size={11} /> Đồng bộ từ Zod
-            </Button>
-          </div>
+        {/* Navigation Tabs */}
+        <div className="flex border-b border-white/[0.04] shrink-0">
+          <button
+            onClick={() => setSubTab('glossary')}
+            className={`flex-1 py-2 text-xs font-semibold uppercase tracking-wider border-b-2 text-center transition duration-200 click-bounce ${
+              subTab === 'glossary'
+                ? 'border-indigo-500 text-indigo-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            Từ Điển Biến Số Trực Quan
+          </button>
+          <button
+            onClick={() => setSubTab('covariance')}
+            className={`flex-1 py-2 text-xs font-semibold uppercase tracking-wider border-b-2 text-center transition duration-200 click-bounce flex items-center justify-center gap-1.5 ${
+              subTab === 'covariance'
+                ? 'border-indigo-500 text-indigo-400'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span>Kiểm Tra Đồng Biến</span>
+            {errors.length > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-red-500 text-white text-[9px] font-bold tracking-tight">
+                {errors.length}
+              </span>
+            )}
+          </button>
         </div>
 
-        {/* Extracted Stats */}
-        <div className="grid grid-cols-3 gap-3 shrink-0">
-          <div className="glass-panel p-3 rounded-xl border-white/[0.03] bg-white/[0.01] text-center">
-            <span className="text-[10px] text-slate-400 block mb-0.5">Tổng số biến</span>
-            <span className="text-lg font-bold font-mono text-indigo-400">{extractedVars.length}</span>
-          </div>
-          <div className="glass-panel p-3 rounded-xl border-white/[0.03] bg-white/[0.01] text-center">
-            <span className="text-[10px] text-slate-400 block mb-0.5 font-medium text-emerald-500/80">Đã giải nghĩa</span>
-            <span className="text-lg font-bold font-mono text-emerald-400">{documentedCount}</span>
-          </div>
-          <div className="glass-panel p-3 rounded-xl border-white/[0.03] bg-white/[0.01] text-center">
-            <span className="text-[10px] text-slate-400 block mb-0.5 font-medium text-amber-500/80">Chưa giải nghĩa</span>
-            <span className="text-lg font-bold font-mono text-amber-400">{undocumentedCount}</span>
-          </div>
-        </div>
-
-        {/* List of variables in schema */}
-        <div className="flex-1 space-y-3">
-          {extractedVars.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center p-6 glass-panel rounded-2xl border-white/[0.03] bg-white/[0.005]">
-              <AlertCircle className="w-8 h-8 text-slate-500 mb-2.5" />
-              <p className="text-xs text-slate-400 max-w-xs leading-relaxed">
-                Chưa phát hiện biến số nào. Hãy thiết lập Zod Schema ở mục <strong className="text-indigo-400">EJS/Zod</strong>, sau đó nhấn nút <strong>Đồng bộ từ Zod</strong> để bắt đầu.
-              </p>
+        {subTab === 'glossary' ? (
+          <>
+            <div className="flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-2.5">
+                <BookOpen className="w-5 h-5 text-indigo-400" />
+                <span className="font-bold text-slate-200 text-xs tracking-wider uppercase">Từ Điển Biến Số</span>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowChat(!showChat)}
+                  className={`p-1.5 rounded-lg border transition-all click-bounce ${
+                    showChat
+                      ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/20'
+                      : 'bg-slate-800/40 border-white/[0.05] text-slate-500 hover:text-slate-300'
+                  }`}
+                  title={showChat ? 'Ẩn Tawa AI Chat' : 'Hiện Tawa AI Chat'}
+                >
+                  {showChat ? <MessageSquare size={14} /> : <MessageSquareOff size={14} />}
+                </button>
+                <Button variant="ghost" size="xs" onClick={handleExtractFromSchema} className="flex items-center gap-1 text-[10px]">
+                  <RefreshCw size={11} /> Đồng bộ từ Zod
+                </Button>
+              </div>
             </div>
-          ) : (
-            extractedVars.map((v, idx) => (
-              <div 
-                key={idx} 
-                className={`p-3.5 rounded-xl border transition-all duration-200 ${
-                  v.description && v.description !== '(Chưa có mô tả)'
-                    ? 'glass-panel bg-white/[0.01] border-white/[0.04] hover:bg-white/[0.02]' 
-                    : 'bg-amber-500/[0.02] border-amber-500/10 hover:bg-amber-500/[0.04]'
-                }`}
-              >
-                <div className="flex justify-between items-start gap-3 mb-1.5">
-                  <span className="font-mono text-xs text-slate-200 font-semibold break-all">
-                    {v.path}
-                  </span>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-white/[0.04] text-[9px] font-mono text-indigo-400">
-                      {v.type}
-                    </span>
-                    {v.defaultValue && (
-                      <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-white/[0.04] text-[9px] font-mono text-slate-400" title="Giá trị mặc định">
-                        def: {v.defaultValue}
+
+            {/* Extracted Stats */}
+            <div className="grid grid-cols-3 gap-3 shrink-0">
+              <div className="glass-panel p-3 rounded-xl border-white/[0.03] bg-white/[0.01] text-center">
+                <span className="text-[10px] text-slate-400 block mb-0.5">Tổng số biến</span>
+                <span className="text-lg font-bold font-mono text-indigo-400">{extractedVars.length}</span>
+              </div>
+              <div className="glass-panel p-3 rounded-xl border-white/[0.03] bg-white/[0.01] text-center">
+                <span className="text-[10px] text-slate-400 block mb-0.5 font-medium text-emerald-500/80">Đã giải nghĩa</span>
+                <span className="text-lg font-bold font-mono text-emerald-400">{documentedCount}</span>
+              </div>
+              <div className="glass-panel p-3 rounded-xl border-white/[0.03] bg-white/[0.01] text-center">
+                <span className="text-[10px] text-slate-400 block mb-0.5 font-medium text-amber-500/80">Chưa giải nghĩa</span>
+                <span className="text-lg font-bold font-mono text-amber-400">{undocumentedCount}</span>
+              </div>
+            </div>
+
+            {/* List of variables in schema */}
+            <div className="flex-1 space-y-3">
+              {extractedVars.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center p-6 glass-panel rounded-2xl border-white/[0.03] bg-white/[0.005]">
+                  <AlertCircle className="w-8 h-8 text-slate-500 mb-2.5" />
+                  <p className="text-xs text-slate-400 max-w-xs leading-relaxed">
+                    Chưa phát hiện biến số nào. Hãy thiết lập Zod Schema ở mục <strong className="text-indigo-400">EJS/Zod</strong>, sau đó nhấn nút <strong>Đồng bộ từ Zod</strong> để bắt đầu.
+                  </p>
+                </div>
+              ) : (
+                extractedVars.map((v, idx) => (
+                  <div 
+                    key={idx} 
+                    className={`p-3.5 rounded-xl border transition-all duration-200 ${
+                      v.description && v.description !== '(Chưa có mô tả)'
+                        ? 'glass-panel bg-white/[0.01] border-white/[0.04] hover:bg-white/[0.02]' 
+                        : 'bg-amber-500/[0.02] border-amber-500/10 hover:bg-amber-500/[0.04]'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start gap-3 mb-1.5">
+                      <span className="font-mono text-xs text-slate-200 font-semibold break-all">
+                        {v.path}
                       </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-white/[0.04] text-[9px] font-mono text-indigo-400">
+                          {v.type}
+                        </span>
+                        {v.defaultValue && (
+                          <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-white/[0.04] text-[9px] font-mono text-slate-400" title="Giá trị mặc định">
+                            def: {v.defaultValue}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {v.description && v.description !== '(Chưa có mô tả)' ? (
+                      <p className="text-[11px] text-slate-400 leading-relaxed font-light pl-1 border-l border-emerald-500/30">
+                        {v.description}
+                      </p>
+                    ) : (
+                      <p className="text-[11px] text-amber-400/70 font-light italic flex items-center gap-1 pl-1 border-l border-amber-500/30">
+                        <AlertTriangle size={10} /> Chưa có giải nghĩa chi tiết trong từ điển.
+                      </p>
                     )}
                   </div>
-                </div>
-                
-                {v.description && v.description !== '(Chưa có mô tả)' ? (
-                  <p className="text-[11px] text-slate-400 leading-relaxed font-light pl-1 border-l border-emerald-500/30">
-                    {v.description}
-                  </p>
-                ) : (
-                  <p className="text-[11px] text-amber-400/70 font-light italic flex items-center gap-1 pl-1 border-l border-amber-500/30">
-                    <AlertTriangle size={10} /> Chưa có giải nghĩa chi tiết trong từ điển.
-                  </p>
+                ))
+              )}
+            </div>
+          </>
+        ) : (
+          /* Covariance Checker Tab */
+          <div className="flex-1 flex flex-col space-y-4">
+            <div className="flex justify-between items-center shrink-0">
+              <span className="font-bold text-slate-200 text-xs tracking-wider uppercase flex items-center gap-2">
+                <RefreshCw className={`w-4 h-4 ${errors.length > 0 ? 'text-red-400 animate-spin-hover' : 'text-emerald-400'}`} />
+                Trạng thái kiểm tra đồng biến
+              </span>
+              {errors.length > 0 && (
+                <Button 
+                  variant="indigo" 
+                  size="xs" 
+                  onClick={handleSyncAll}
+                  className="flex items-center gap-1 text-[10px] py-1.5"
+                >
+                  <RefreshCw size={11} /> Đồng Bộ Tất Cả ({errors.length})
+                </Button>
+              )}
+            </div>
+
+            {errors.length === 0 && warnings.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center p-6 glass-panel rounded-2xl border-emerald-500/25 bg-emerald-500/[0.005]">
+                <CheckCircle2 className="w-10 h-10 text-emerald-400 mb-3" />
+                <h4 className="text-slate-200 font-bold text-sm mb-1">Đồng Bộ Hoàn Hảo!</h4>
+                <p className="text-xs text-slate-400 max-w-xs leading-relaxed">
+                  Zod Schema khớp 100% với các biến được gọi trong Regex HTML/JS UI và EJS Prompt Template. Không có lỗi lệch pha.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4 overflow-y-auto pr-1 flex-grow custom-scrollbar">
+                {/* Error Section (Missing from Schema) */}
+                {errors.length > 0 && (
+                  <div className="space-y-2.5">
+                    <span className="text-[10px] font-bold text-red-400 uppercase tracking-widest block">Lỗi Không Khớp Schema (Cần Bổ Sung):</span>
+                    {errors.map((err, idx) => (
+                      <div 
+                        key={idx} 
+                        className="p-3.5 rounded-xl border border-red-500/15 bg-red-500/[0.015] hover:bg-red-500/[0.025] transition flex justify-between items-center gap-3"
+                      >
+                        <div className="space-y-1">
+                          <span className="font-mono text-xs text-red-200 font-semibold block break-all">
+                            {err.path}
+                          </span>
+                          <span className="text-[9px] text-slate-400 block">
+                            Dùng tại: <span className="text-slate-300 font-medium">{err.location}</span>
+                          </span>
+                          <span className="px-1 py-0.5 rounded bg-slate-900 border border-white/[0.04] text-[8px] font-mono text-red-400 inline-block">
+                            Kiểu gợi ý: {err.type}
+                          </span>
+                        </div>
+                        <Button 
+                          variant="emerald" 
+                          size="xs" 
+                          className="flex items-center gap-1 shrink-0 text-[10px] py-1 px-2.5 rounded-lg font-medium shadow-md shadow-emerald-950/20 hover:scale-102 click-bounce"
+                          onClick={() => handleQuickFix(err.path, err.type)}
+                        >
+                          <Check size={11} /> Sửa Nhanh
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Warning Section (Unused variables in Schema) */}
+                {warnings.length > 0 && (
+                  <div className="space-y-2.5 pt-2">
+                    <span className="text-[10px] font-bold text-amber-400 uppercase tracking-widest block">Biến Thừa (Khai báo nhưng chưa dùng):</span>
+                    {warnings.map((warn, idx) => (
+                      <div 
+                        key={idx} 
+                        className="p-3 rounded-xl border border-amber-500/10 bg-amber-500/[0.005] text-xs text-slate-300"
+                      >
+                        <span className="font-mono text-[11px] text-amber-200 font-semibold block break-all mb-0.5">
+                          {warn.path}
+                        </span>
+                        <span className="text-[10px] text-slate-500 block">
+                          {warn.details}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
-            ))
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Right Column: Markdown Dictionary Editor */}

@@ -78,7 +78,7 @@ function parseDescriptions(dictionaryText) {
   for (const line of lines) {
     const trimmed = line.trim();
     // Matches: "- stat_data.X: description" or "- `stat_data.X`: description" or "* stat_data.X - description"
-    const match = trimmed.match(/^[-*+]\s+(?:`?)([\w\u00C0-\u1EF9.]+)(?:`?)\s*[:|-]\s*(.+)$/);
+    const match = trimmed.match(/^[-*+]\s+`?([\w\u00C0-\u1EF9\u4e00-\u9fa5\s.-]+)`?\s*[:|-]\s*(.+)$/);
     if (match) {
       const path = match[1].trim();
       const desc = match[2].trim();
@@ -92,13 +92,13 @@ function parseDescriptions(dictionaryText) {
 const testSchema = `// MVU Zod Schema v4
 const schema = z.object({
   stat_data: z.object({
-    Nhân_vật: z.object({
+    "Nhân vật": z.object({
       HP: z.coerce.number().prefault(100).transform(v => Math.max(0, v)),
       MaxHP: z.coerce.number().prefault(100),
-      Cấp_độ: z.coerce.number().prefault(1),
-      Sức_mạnh: z.coerce.number().prefault(10),
-      Kinh_nghiệm: z.coerce.number().prefault(0),
-      Độ_hảo_cảm: z.coerce.number().prefault(50)
+      "Cấp độ": z.coerce.number().prefault(1),
+      "Sức mạnh": z.coerce.number().prefault(10),
+      "Kinh nghiệm": z.coerce.number().prefault(0),
+      "Độ hảo cảm": z.coerce.number().prefault(50)
     }).prefault({})
   }).prefault({})
 });
@@ -110,12 +110,12 @@ console.log("Parsed variables:", JSON.stringify(parsedVars, null, 2));
 
 // Assertions
 const expectedPaths = [
-  'stat_data.Nhân_vật.HP',
-  'stat_data.Nhân_vật.MaxHP',
-  'stat_data.Nhân_vật.Cấp_độ',
-  'stat_data.Nhân_vật.Sức_mạnh',
-  'stat_data.Nhân_vật.Kinh_nghiệm',
-  'stat_data.Nhân_vật.Độ_hảo_cảm'
+  'stat_data.Nhân vật.HP',
+  'stat_data.Nhân vật.MaxHP',
+  'stat_data.Nhân vật.Cấp độ',
+  'stat_data.Nhân vật.Sức mạnh',
+  'stat_data.Nhân vật.Kinh nghiệm',
+  'stat_data.Nhân vật.Độ hảo cảm'
 ];
 
 let failed = false;
@@ -135,20 +135,20 @@ expectedPaths.forEach((path) => {
 });
 
 // Test Description parser
-const testDictionary = `# BỘ TỪ ĐIỂN BIẾN SỐ\n\n- \`stat_data.Nhân_vật.HP\`: Lượng máu hiện tại\n* \`stat_data.Nhân_vật.MaxHP\` - Lượng máu tối đa\n- stat_data.Nhân_vật.Cấp_độ: Cấp độ hiện tại`;
+const testDictionary = `# BỘ TỪ ĐIỂN BIẾN SỐ\n\n- \`stat_data.Nhân vật.HP\`: Lượng máu hiện tại\n* \`stat_data.Nhân vật.MaxHP\` - Lượng máu tối đa\n- \`stat_data.Nhân vật.Cấp độ\`: Cấp độ hiện tại`;
 const parsedDescs = parseDescriptions(testDictionary);
 console.log("Parsed descriptions:", JSON.stringify(parsedDescs, null, 2));
 
-if (parsedDescs['stat_data.Nhân_vật.HP'] !== 'Lượng máu hiện tại') {
+if (parsedDescs['stat_data.Nhân vật.HP'] !== 'Lượng máu hiện tại') {
   console.error("ERROR: Failed to parse description for HP");
   failed = true;
 }
-if (parsedDescs['stat_data.Nhân_vật.MaxHP'] !== 'Lượng máu tối đa') {
+if (parsedDescs['stat_data.Nhân vật.MaxHP'] !== 'Lượng máu tối đa') {
   console.error("ERROR: Failed to parse description for MaxHP");
   failed = true;
 }
-if (parsedDescs['stat_data.Nhân_vật.Cấp_độ'] !== 'Cấp độ hiện tại') {
-  console.error("ERROR: Failed to parse description for Cấp_độ");
+if (parsedDescs['stat_data.Nhân vật.Cấp độ'] !== 'Cấp độ hiện tại') {
+  console.error("ERROR: Failed to parse description for Cấp độ");
   failed = true;
 }
 

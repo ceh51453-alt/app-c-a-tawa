@@ -257,6 +257,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </label>
             </div>
 
+            <div className="p-4 rounded-lg bg-indigo-900/10 border border-indigo-500/30 mb-4">
+              <label className="flex items-start gap-4 cursor-pointer">
+                  <div className="relative flex items-center mt-1">
+                     <input 
+                        type="checkbox" 
+                        className="peer sr-only"
+                        checked={formData.enablePlanning ?? true}
+                        onChange={(e) => setFormData({...formData, enablePlanning: e.target.checked})}
+                     />
+                     <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-indigo-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                  </div>
+                  <div>
+                    <span className="block text-sm font-bold text-indigo-200 flex items-center gap-2">Chế độ Lập kế hoạch & Phê duyệt</span>
+                    <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                      Khi bật, AI sẽ lập kế hoạch thay đổi và hiển thị nút duyệt trước khi thực hiện. Nếu tắt, AI sẽ tự động áp dụng ngay.
+                    </p>
+                  </div>
+              </label>
+            </div>
+
             <div className="p-4 rounded-lg bg-red-900/10 border border-red-500/30">
               <label className="flex items-start gap-4 cursor-pointer">
                   <div className="relative flex items-center mt-1">

@@ -10,6 +10,7 @@ interface CardProjectManagerProps {
   onImportV3: (jsonStr: string) => void;
   onImportLegacyLorebook: (jsonStr: string) => void;
   onExportV3: () => void;
+  onExportWorldbook: () => void;
   onSeedDefaultRegex: () => void;
   onSeedSystemEntries: () => void;
   onResetProject: () => void;
@@ -22,6 +23,7 @@ export const CardProjectManager: React.FC<CardProjectManagerProps> = ({
   onImportV3,
   onImportLegacyLorebook,
   onExportV3,
+  onExportWorldbook,
   onSeedDefaultRegex,
   onSeedSystemEntries,
   onResetProject,
@@ -211,20 +213,31 @@ export const CardProjectManager: React.FC<CardProjectManagerProps> = ({
                 </div>
               </div>
 
-              {/* Import Legacy Lorebook */}
+              {/* Import/Export Standalone Worldbook / Lorebook */}
               <div className="p-4.5 rounded-xl border border-white/5 bg-black/25 space-y-3">
-                <h4 className="text-xs font-bold text-slate-300 tracking-wide">Nhập Mục từ Cũ (.json)</h4>
-                <label className="block w-full">
-                  <span className="flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-bold bg-white/5 hover:bg-white/10 text-slate-200 border border-white/5 rounded-xl cursor-pointer transition-all duration-200 click-bounce">
-                    <Upload className="w-4 h-4 text-indigo-400" /> Chọn File Mục từ (.json)
-                  </span>
-                  <input
-                    type="file"
-                    accept=".json"
-                    onChange={(e) => handleFileImport(e, false)}
-                    className="hidden"
-                  />
-                </label>
+                <h4 className="text-xs font-bold text-slate-300 tracking-wide">SillyTavern Worldbook / Lorebook (.json)</h4>
+                <div className="flex gap-2.5">
+                  <label className="flex-1">
+                    <span className="flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-bold bg-white/5 hover:bg-white/10 text-slate-200 border border-white/5 rounded-xl cursor-pointer transition-all duration-200 click-bounce">
+                      <Upload className="w-4 h-4 text-indigo-400" /> Nhập Worldbook
+                    </span>
+                    <input
+                      type="file"
+                      accept=".json"
+                      onChange={(e) => handleFileImport(e, false)}
+                      className="hidden"
+                    />
+                  </label>
+                  <Button
+                    variant="indigo"
+                    size="sm"
+                    className="flex-1 py-2.5 text-xs font-bold"
+                    onClick={onExportWorldbook}
+                    icon={<Download className="w-4 h-4 text-white" />}
+                  >
+                    Xuất Worldbook
+                  </Button>
+                </div>
               </div>
 
               {/* Seeding shortcuts for MVU / Zod / ERA */}

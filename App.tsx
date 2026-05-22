@@ -19,7 +19,8 @@ import { WorldbuildingChat } from './components/WorldbuildingChat';
 import { VariableDictionary } from './components/VariableDictionary';
 import { Button } from './components/ui/Button';
 import { Modal } from './components/ui/Modal';
-import { exportCardV3, importCardV3, importLegacyLorebook } from './services/cardExporter';
+import { exportCardV3, importCardV3, importLegacyLorebook, exportStandaloneLorebook } from './services/cardExporter';
+import { validateSchemaRegexCovariance } from './services/validator';
 import { 
   Download, Upload, Settings, BookOpen, MessageSquare, Edit, 
   Languages, HelpCircle, Cpu, Layers, Eye, Code, Sparkles, RefreshCw, Trash2
@@ -38,6 +39,7 @@ const DEFAULT_SETTINGS: OpenAISettings = {
   nsfw: false,
   enableSearch: true,
   minTokens: 4000,
+  enablePlanning: true,
 };
 
 const DEFAULT_PROJECT: CardProject = {
@@ -510,6 +512,21 @@ const App: React.FC = () => {
       downloadAnchorNode.remove();
     } catch (err: any) {
       alert("Lỗi xuất thẻ: " + err.message);
+    }
+  };
+
+  const handleExportLegacyWorldbook = () => {
+    try {
+      const worldbookJson = exportStandaloneLorebook(project);
+      const dataStr = "data:application/json;charset=utf-8," + encodeURIComponent(worldbookJson);
+      const downloadAnchorNode = document.createElement('a');
+      downloadAnchorNode.setAttribute("href", dataStr);
+      downloadAnchorNode.setAttribute("download", `${project.lorebook.name || "SillyTavern_Worldbook"}.json`);
+      document.body.appendChild(downloadAnchorNode);
+      downloadAnchorNode.click();
+      downloadAnchorNode.remove();
+    } catch (err: any) {
+      alert("Lỗi xuất Worldbook: " + err.message);
     }
   };
 
@@ -1059,7 +1076,7 @@ const App: React.FC = () => {
           key: ['[mvu_update] Quy tắc cập nhật biến'],
           secondary_keys: [],
           comment: '[mvu_update] Quy tắc cập nhật biến',
-          content: '---\nquy tắc cập nhật biến:\n  Người Chơi:\n    Trạng Thái:\n      type: string\n      check: Cập nhật khi thay đổi trạng thái.\n  (BỔ SUNG THÊM CÁC QUY TẮC DỰA TRÊN ZOD SCHEMA CỦA BẠN)',
+          content: '---\nquy tắc cập nhật biến:\n  Người Chơi:\n    Trạng Thái:\n      type: string\n      check: Cập nhật khi trạng thái hoạt động thay đổi (như rảnh rỗi, chiến đấu, tu luyện, ngủ nghỉ).\n    Thông Tin:\n      HP:\n        type: number\n        check: Tăng khi hồi máu/trị thương; giảm khi chịu sát thương. Không vượt quá MaxHP.\n      Cấp độ:\n        type: number\n        check: Tăng khi EXP đạt/vượt giới hạn cấp. Reset EXP về 0 hoặc trừ đi giới hạn khi lên cấp.\n      Kinh nghiệm:\n        type: number\n        check: Tăng khi tu luyện, đánh quái hoặc hoàn thành nhiệm vụ.\n  Thế Giới:\n    Khu vực hiện tại:\n      type: string\n      check: Cập nhật khi người chơi di chuyển sang địa điểm khác.\n  (LƯU Ý: BẮT BUỘC KHAI BÁO đầy đủ 100% tất cả các trường/biến có trong Zod Schema dưới dạng cây phân cấp. Với từng biến con cuối cùng, cung cấp chi tiết type và check ghi rõ điều kiện kích hoạt/cập nhật để bất kỳ AI nào đọc cũng hiểu và cập nhật đúng/hết biến, không để sót biến nào. TUYỆT ĐỐI CẤM dùng placeholder hoặc viết chung chung)',
           constant: false,
           selective: true,
           vectorized: false,
@@ -1284,11 +1301,18 @@ AI hãy chú ý diễn giải thông tin dựa trên các lorebook entries này.
 
   const selectedEntry = lorebook.entries.find(e => e.uid === selectedUid) || null;
 
+  const { errors: covarianceErrors } = project.type !== 'normal' ? validateSchemaRegexCovariance(project) : { errors: [] };
+
   const tabs = [
     { id: 'worldbuilding', label: 'Tawa AI', icon: <MessageSquare size={16} />, visible: true },
     { id: 'project', label: 'Dự án', icon: <Cpu size={16} />, visible: true },
     { id: 'character', label: 'Nhân vật', icon: <Edit size={16} />, visible: true },
-    { id: 'dictionary', label: 'Từ điển biến', icon: <BookOpen size={16} />, visible: project.type !== 'normal' },
+    { 
+      id: 'dictionary', 
+      label: covarianceErrors.length > 0 ? `Từ điển biến ⚠️ (${covarianceErrors.length})` : 'Từ điển biến', 
+      icon: <BookOpen size={16} />, 
+      visible: project.type !== 'normal' 
+    },
     { id: 'lorebook', label: 'Mục lục', icon: <BookOpen size={16} />, visible: true },
     { id: 'regex', label: 'Regex Scripts', icon: <Layers size={16} />, visible: project.type !== 'normal' },
     { id: 'ejs', label: 'EJS Template', icon: <Code size={16} />, visible: project.type !== 'normal' },
@@ -1372,6 +1396,7 @@ AI hãy chú ý diễn giải thông tin dựa trên các lorebook entries này.
             onImportV3={handleImportV3}
             onImportLegacyLorebook={handleImportLegacyLorebook}
             onExportV3={handleExportV3}
+            onExportWorldbook={handleExportLegacyWorldbook}
             onSeedDefaultRegex={handleSeedDefaultRegex}
             onSeedSystemEntries={handleSeedSystemEntries}
             onResetProject={handleResetProject}
@@ -1412,6 +1437,8 @@ AI hãy chú ý diễn giải thông tin dựa trên các lorebook entries này.
                   )
                 }));
               }}
+              onImportWorldbook={handleImportLegacyLorebook}
+              onExportWorldbook={handleExportLegacyWorldbook}
             />
             <EntryEditor 
               entry={selectedEntry}

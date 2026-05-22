@@ -5,7 +5,7 @@ import { Button } from './ui/Button';
 import { 
   Send, Bot, User, Loader2, Sparkles, PlusCircle, Edit3, Trash2, 
   Image as ImageIcon, X, CornerDownLeft, Dna, Layers, MessageSquare, FileText,
-  Settings, Code, RefreshCw, Cpu
+  Settings, Code, RefreshCw, Cpu, Check
 } from 'lucide-react';
 
 interface WorldbuildingChatProps {
@@ -31,6 +31,8 @@ export const WorldbuildingChat: React.FC<WorldbuildingChatProps> = ({
   const [loading, setLoading] = useState(false);
   const [streamBuffer, setStreamBuffer] = useState('');
   const [mode, setMode] = useState<WorldbuildingMode>('genesis');
+  const [activeDocument, setActiveDocument] = useState<{name: string, content: string} | null>(null);
+  const [consecutiveEmptyContinuesState, setConsecutiveEmptyContinuesState] = useState(0);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -107,6 +109,7 @@ export const WorldbuildingChat: React.FC<WorldbuildingChatProps> = ({
     let initialInput = input;
     if (selectedDocument) {
       initialInput += `\n\n[System: User attached document "${selectedDocument.name}". Total length: ${selectedDocument.content.length} characters. Use action {"type": "read_document", "chunk_index": 0} to read the first chunk of 15000 characters.]`;
+      setActiveDocument(selectedDocument);
     }
 
     const initialImages = [...selectedImages];
@@ -122,9 +125,21 @@ export const WorldbuildingChat: React.FC<WorldbuildingChatProps> = ({
     setSelectedDocument(null);
   };
 
-  const processChat = async (initialInput: string, initialImages: string[], attachedDoc: {name: string, content: string} | null) => {
+  const MODIFYING_ACTIONS = [
+    'create', 'update', 'delete', 'set_project_type', 
+    'update_zod_schema', 'update_mvu_dictionary', 
+    'update_ejs_template', 'update_character_data', 
+    'create_regex', 'update_regex', 'delete_regex', 'seed_regex'
+  ];
+
+  const processChat = async (
+    initialInput: string, 
+    initialImages: string[], 
+    attachedDoc: {name: string, content: string} | null,
+    baseMessages?: ChatMessage[]
+  ) => {
     setLoading(true);
-    let currentMessages = [...messages];
+    let currentMessages = baseMessages || [...messages];
     let currentProjectState = {
       ...project,
       lorebook: {
@@ -136,7 +151,7 @@ export const WorldbuildingChat: React.FC<WorldbuildingChatProps> = ({
     let nextInput = initialInput;
     let nextImages = initialImages;
     let keepRunning = true;
-    let consecutiveEmptyContinues = 0;
+    let localConsecutiveEmptyContinues = consecutiveEmptyContinuesState;
 
     while (keepRunning) {
       keepRunning = false;
@@ -169,32 +184,78 @@ export const WorldbuildingChat: React.FC<WorldbuildingChatProps> = ({
           mode
         );
 
+        const isPlanningEnabled = settings.enablePlanning !== false;
+        const hasModifyingActions = response.actions?.some(a => MODIFYING_ACTIONS.includes(a.type));
+
         const assistantMsg: ChatMessage = {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
           content: response.message,
           timestamp: Date.now(),
-          actions: response.actions
+          actions: response.actions,
+          approvalStatus: (hasModifyingActions && isPlanningEnabled) ? 'pending' : undefined,
+          aiStatus: response.status
         };
 
         currentMessages = [...currentMessages, assistantMsg];
         setMessages(currentMessages);
         
+        if (hasModifyingActions && isPlanningEnabled) {
+          setConsecutiveEmptyContinuesState(localConsecutiveEmptyContinues);
+          keepRunning = false;
+          break; // Stop loop, wait for user approval
+        }
+
         if (response.actions && response.actions.length > 0) {
           console.log('[TAWA-CHAT-DEBUG] Calling onApplyActions with', response.actions.length, 'actions:', JSON.stringify(response.actions.map(a => ({type: a.type, comment: a.data?.comment || a.target_comment}))));
           onApplyActions(response.actions);
           
-          // Update local project state for the next iteration
-          for (const action of response.actions) {
-            if (action.type === 'create' && action.data) {
-              currentProjectState.lorebook.entries.push(action.data as any);
-            } else if (action.type === 'update' && action.data) {
-              const idx = currentProjectState.lorebook.entries.findIndex(e => e.comment.toLowerCase() === action.target_comment?.toLowerCase());
-              if (idx !== -1) {
-                currentProjectState.lorebook.entries[idx] = { ...currentProjectState.lorebook.entries[idx], ...action.data };
+          if (!isPlanningEnabled && hasModifyingActions) {
+            // Update local project state for the next iteration when planning is disabled
+            for (const action of response.actions) {
+              if (action.type === 'create' && action.data) {
+                currentProjectState.lorebook.entries.push(action.data as any);
+              } else if (action.type === 'update' && action.data) {
+                const idx = currentProjectState.lorebook.entries.findIndex(e => e.comment.toLowerCase() === action.target_comment?.toLowerCase());
+                if (idx !== -1) {
+                  currentProjectState.lorebook.entries[idx] = { ...currentProjectState.lorebook.entries[idx], ...action.data };
+                }
+              } else if (action.type === 'delete') {
+                currentProjectState.lorebook.entries = currentProjectState.lorebook.entries.filter(e => e.comment.toLowerCase() !== action.target_comment?.toLowerCase());
+              } else if (action.type === 'set_project_type' && action.project_type) {
+                currentProjectState.type = action.project_type;
+              } else if (action.type === 'update_zod_schema' && action.zod_schema !== undefined) {
+                currentProjectState.charData.zod_schema = action.zod_schema;
+              } else if (action.type === 'update_mvu_dictionary' && action.mvu_dictionary !== undefined) {
+                currentProjectState.charData.mvu_dictionary = action.mvu_dictionary;
+              } else if (action.type === 'update_ejs_template' && action.ejs_template !== undefined) {
+                currentProjectState.charData.ejs_template = action.ejs_template;
+              } else if (action.type === 'update_character_data' && action.char_data) {
+                currentProjectState.charData = { ...currentProjectState.charData, ...action.char_data };
+              } else if (action.type === 'create_regex' && action.regex_data) {
+                currentProjectState.regexScripts.push({
+                  id: 'reg-' + Date.now() + Math.random().toString(36).substr(2, 5),
+                  scriptName: action.regex_data.scriptName || 'New Regex',
+                  findRegex: action.regex_data.findRegex || '',
+                  replaceString: action.regex_data.replaceString || '',
+                  trimStrings: action.regex_data.trimStrings || [],
+                  minDepth: action.regex_data.minDepth || null,
+                  maxDepth: action.regex_data.maxDepth || null,
+                  runOnSource: action.regex_data.runOnSource || false,
+                  promptOnly: action.regex_data.promptOnly || false,
+                  isactive: action.regex_data.isactive !== undefined ? action.regex_data.isactive : true,
+                  markdownOnly: action.regex_data.markdownOnly || false,
+                  runOnEdit: action.regex_data.runOnEdit !== undefined ? action.regex_data.runOnEdit : true,
+                  substituteRegex: action.regex_data.substituteRegex || 0,
+                  placement: action.regex_data.placement || [2]
+                });
+              } else if (action.type === 'update_regex' && action.target_regex_id && action.regex_data) {
+                currentProjectState.regexScripts = currentProjectState.regexScripts.map(s => 
+                  s.id === action.target_regex_id ? { ...s, ...action.regex_data } : s
+                );
+              } else if (action.type === 'delete_regex' && action.target_regex_id) {
+                currentProjectState.regexScripts = currentProjectState.regexScripts.filter(s => s.id !== action.target_regex_id);
               }
-            } else if (action.type === 'delete') {
-              currentProjectState.lorebook.entries = currentProjectState.lorebook.entries.filter(e => e.comment.toLowerCase() !== action.target_comment?.toLowerCase());
             }
           }
         }
@@ -203,23 +264,24 @@ export const WorldbuildingChat: React.FC<WorldbuildingChatProps> = ({
         const readDocActions = response.actions?.filter(a => a.type === 'read_document') || [];
         
         if (readDocActions.length > 0) {
-          consecutiveEmptyContinues = 0;
+          localConsecutiveEmptyContinues = 0;
           const action = readDocActions[0];
           const chunkIndex = action.chunk_index || 0;
           const chunkSize = 15000;
           const start = chunkIndex * chunkSize;
           const end = start + chunkSize;
           
-          if (!attachedDoc || start >= attachedDoc.content.length) {
+          const docToUse = attachedDoc || activeDocument;
+          if (!docToUse || start >= docToUse.content.length) {
             nextInput = `[System: END OF DOCUMENT. There are no more chunks to read. Please set status to DONE if you have finished generating entries.]`;
           } else {
-            const chunk = attachedDoc.content.substring(start, end);
+            const chunk = docToUse.content.substring(start, end);
             nextInput = `[System: Document Chunk ${chunkIndex}]\n${chunk}\n\n[System: End of Chunk ${chunkIndex}. Generate entries for this chunk. If you need the next chunk, output action {"type": "read_document", "chunk_index": ${chunkIndex + 1}}.]`;
           }
           nextImages = [];
           keepRunning = true;
         } else if (fetchActions.length > 0) {
-          consecutiveEmptyContinues = 0;
+          localConsecutiveEmptyContinues = 0;
           setStreamBuffer('Đang tải dữ liệu từ Wiki...');
           let combinedData = '';
           const { fetchFandomData } = await import('../services/openai');
@@ -234,12 +296,12 @@ export const WorldbuildingChat: React.FC<WorldbuildingChatProps> = ({
           keepRunning = true;
         } else if (response.status === 'CONTINUE') {
           if (!response.actions || response.actions.length === 0) {
-            consecutiveEmptyContinues++;
+            localConsecutiveEmptyContinues++;
           } else {
-            consecutiveEmptyContinues = 0;
+            localConsecutiveEmptyContinues = 0;
           }
           
-          if (consecutiveEmptyContinues > 2) {
+          if (localConsecutiveEmptyContinues > 2) {
             console.warn("Too many empty CONTINUE responses. Stopping auto-generation.");
             keepRunning = false;
           } else {
@@ -262,8 +324,151 @@ export const WorldbuildingChat: React.FC<WorldbuildingChatProps> = ({
       }
     }
     
+    setConsecutiveEmptyContinuesState(localConsecutiveEmptyContinues);
     setLoading(false);
     setStreamBuffer('');
+  };
+
+  const handleApproveActions = async (messageId: string) => {
+    const msgIndex = messages.findIndex(m => m.id === messageId);
+    if (msgIndex === -1) return;
+    const msg = messages[msgIndex];
+    if (!msg.actions || msg.actions.length === 0) return;
+
+    const updatedMessages = [...messages];
+    updatedMessages[msgIndex] = {
+      ...msg,
+      approvalStatus: 'approved'
+    };
+    setMessages(updatedMessages);
+
+    console.log('[TAWA-CHAT-DEBUG] Approving and applying actions:', msg.actions);
+    onApplyActions(msg.actions);
+
+    let currentProjectState = {
+      ...project,
+      lorebook: {
+        ...project.lorebook,
+        entries: [...project.lorebook.entries]
+      }
+    };
+    
+    for (const action of msg.actions) {
+      if (action.type === 'create' && action.data) {
+        currentProjectState.lorebook.entries.push(action.data as any);
+      } else if (action.type === 'update' && action.data) {
+        const idx = currentProjectState.lorebook.entries.findIndex(e => e.comment.toLowerCase() === action.target_comment?.toLowerCase());
+        if (idx !== -1) {
+          currentProjectState.lorebook.entries[idx] = { ...currentProjectState.lorebook.entries[idx], ...action.data };
+        }
+      } else if (action.type === 'delete') {
+        currentProjectState.lorebook.entries = currentProjectState.lorebook.entries.filter(e => e.comment.toLowerCase() !== action.target_comment?.toLowerCase());
+      } else if (action.type === 'set_project_type' && action.project_type) {
+        currentProjectState.type = action.project_type;
+      } else if (action.type === 'update_zod_schema' && action.zod_schema !== undefined) {
+        currentProjectState.charData.zod_schema = action.zod_schema;
+      } else if (action.type === 'update_mvu_dictionary' && action.mvu_dictionary !== undefined) {
+        currentProjectState.charData.mvu_dictionary = action.mvu_dictionary;
+      } else if (action.type === 'update_ejs_template' && action.ejs_template !== undefined) {
+        currentProjectState.charData.ejs_template = action.ejs_template;
+      } else if (action.type === 'update_character_data' && action.char_data) {
+        currentProjectState.charData = { ...currentProjectState.charData, ...action.char_data };
+      } else if (action.type === 'create_regex' && action.regex_data) {
+        currentProjectState.regexScripts.push({
+          id: 'reg-' + Date.now() + Math.random().toString(36).substr(2, 5),
+          scriptName: action.regex_data.scriptName || 'New Regex',
+          findRegex: action.regex_data.findRegex || '',
+          replaceString: action.regex_data.replaceString || '',
+          trimStrings: action.regex_data.trimStrings || [],
+          minDepth: action.regex_data.minDepth || null,
+          maxDepth: action.regex_data.maxDepth || null,
+          runOnSource: action.regex_data.runOnSource || false,
+          promptOnly: action.regex_data.promptOnly || false,
+          isactive: action.regex_data.isactive !== undefined ? action.regex_data.isactive : true,
+          markdownOnly: action.regex_data.markdownOnly || false,
+          runOnEdit: action.regex_data.runOnEdit !== undefined ? action.regex_data.runOnEdit : true,
+          substituteRegex: action.regex_data.substituteRegex || 0,
+          placement: action.regex_data.placement || [2]
+        });
+      } else if (action.type === 'update_regex' && action.target_regex_id && action.regex_data) {
+        currentProjectState.regexScripts = currentProjectState.regexScripts.map(s => 
+          s.id === action.target_regex_id ? { ...s, ...action.regex_data } : s
+        );
+      } else if (action.type === 'delete_regex' && action.target_regex_id) {
+        currentProjectState.regexScripts = currentProjectState.regexScripts.filter(s => s.id !== action.target_regex_id);
+      }
+    }
+
+    const fetchActions = msg.actions.filter(a => a.type === 'fetch_fandom_data');
+    const readDocActions = msg.actions.filter(a => a.type === 'read_document');
+    const isContinue = msg.aiStatus === 'CONTINUE';
+
+    let nextInput = '';
+    let keepRunning = false;
+
+    if (readDocActions.length > 0) {
+      const action = readDocActions[0];
+      const chunkIndex = action.chunk_index || 0;
+      const chunkSize = 15000;
+      const start = chunkIndex * chunkSize;
+      const end = start + chunkSize;
+      
+      if (!activeDocument || start >= activeDocument.content.length) {
+        nextInput = `[System: END OF DOCUMENT. There are no more chunks to read. Please set status to DONE if you have finished generating entries.]`;
+      } else {
+        const chunk = activeDocument.content.substring(start, end);
+        nextInput = `[System: Document Chunk ${chunkIndex}]\n${chunk}\n\n[System: End of Chunk ${chunkIndex}. Generate entries for this chunk. If you need the next chunk, output action {"type": "read_document", "chunk_index": ${chunkIndex + 1}}.]`;
+      }
+      keepRunning = true;
+    } else if (fetchActions.length > 0) {
+      setLoading(true);
+      setStreamBuffer('Đang tải dữ liệu từ Wiki...');
+      try {
+        let combinedData = '';
+        const { fetchFandomData } = await import('../services/openai');
+        for (const action of fetchActions) {
+          if (action.url) {
+            const data = await fetchFandomData(action.url);
+            combinedData += `\n\n--- Data from ${action.url} ---\n${data}`;
+          }
+        }
+        nextInput = `Here is the data you requested:\n${combinedData}\n\nPlease generate the Lorebook entries based on this data. Remember to use 'CONTINUE' status if you need to generate more batches.`;
+        keepRunning = true;
+      } catch (err: any) {
+        setMessages(prev => [...prev, {
+          id: Date.now().toString(),
+          role: 'system',
+          content: `Lỗi tải wiki: ${err.message}`,
+          timestamp: Date.now(),
+          isError: true
+        }]);
+        setLoading(false);
+        setStreamBuffer('');
+        return;
+      }
+    } else if (isContinue) {
+      if (consecutiveEmptyContinuesState > 2) {
+        console.warn("Too many empty CONTINUE responses. Stopping auto-generation.");
+        keepRunning = false;
+      } else {
+        nextInput = "Please continue generating the next batch of entries.";
+        keepRunning = true;
+      }
+    }
+
+    if (keepRunning) {
+      await processChat(nextInput, [], activeDocument, updatedMessages);
+    }
+  };
+
+  const handleRejectActions = (messageId: string) => {
+    const updatedMessages = messages.map(m => {
+      if (m.id === messageId) {
+        return { ...m, approvalStatus: 'rejected' as const };
+      }
+      return m;
+    });
+    setMessages(updatedMessages);
   };
 
   return (
@@ -388,10 +593,27 @@ export const WorldbuildingChat: React.FC<WorldbuildingChatProps> = ({
                 
                 {/* Actions Report Card */}
                 {msg.actions && msg.actions.length > 0 && (
-                  <div className="mt-3.5 pt-3.5 border-t border-white/[0.05] space-y-2">
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">
-                      Tawa đã thực hiện {msg.actions.length} thay đổi:
-                    </p>
+                  <div className="mt-3.5 pt-3.5 border-t border-white/[0.05] space-y-3">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">
+                        Kế hoạch thay đổi ({msg.actions.length} hành động):
+                      </p>
+                      {msg.approvalStatus === 'pending' && (
+                        <span className="px-2 py-0.5 rounded-md text-[8px] font-bold uppercase tracking-wider bg-amber-500/10 border border-amber-500/25 text-amber-400 shadow-[0_0_8px_rgba(245,158,11,0.08)]">
+                          Chờ phê duyệt
+                        </span>
+                      )}
+                      {msg.approvalStatus === 'approved' && (
+                        <span className="px-2 py-0.5 rounded-md text-[8px] font-bold uppercase tracking-wider bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.08)]">
+                          Đã áp dụng
+                        </span>
+                      )}
+                      {msg.approvalStatus === 'rejected' && (
+                        <span className="px-2 py-0.5 rounded-md text-[8px] font-bold uppercase tracking-wider bg-red-500/10 border border-red-500/25 text-red-400 shadow-[0_0_8px_rgba(239,68,68,0.08)]">
+                          Đã từ chối
+                        </span>
+                      )}
+                    </div>
                      {msg.actions.map((action, idx) => (
                       <div key={idx} className="flex items-start gap-2 text-[10px] bg-black/40 p-2 rounded-xl border border-white/[0.03]">
                          {action.type === 'create' && <PlusCircle size={13} className="text-green-400 mt-0.5 shrink-0" />}
@@ -406,6 +628,8 @@ export const WorldbuildingChat: React.FC<WorldbuildingChatProps> = ({
                          {action.type === 'update_mvu_dictionary' && <Layers size={13} className="text-cyan-400 mt-0.5 shrink-0" />}
                          {action.type === 'update_ejs_template' && <Code size={13} className="text-amber-400 mt-0.5 shrink-0" />}
                          {action.type === 'create_regex' && <RefreshCw size={13} className="text-teal-400 mt-0.5 shrink-0" />}
+                         {action.type === 'update_regex' && <RefreshCw size={13} className="text-teal-400 mt-0.5 shrink-0" />}
+                         {action.type === 'delete_regex' && <Trash2 size={13} className="text-red-400 mt-0.5 shrink-0" />}
                          
                          <div className="min-w-0 flex-1">
                            <span className={`font-mono font-bold text-[9px] tracking-wide ${
@@ -420,6 +644,7 @@ export const WorldbuildingChat: React.FC<WorldbuildingChatProps> = ({
                              action.type === 'update_mvu_dictionary' ? 'text-cyan-400' :
                              action.type === 'update_ejs_template' ? 'text-amber-400' :
                              action.type === 'create_regex' ? 'text-teal-400' :
+                             action.type === 'update_regex' ? 'text-teal-400' :
                              'text-red-400'
                            }`}>
                              {action.type.toUpperCase()}
@@ -435,11 +660,39 @@ export const WorldbuildingChat: React.FC<WorldbuildingChatProps> = ({
                               action.type === 'update_mvu_dictionary' ? 'Cập nhật từ điển biến số' :
                               action.type === 'update_ejs_template' ? 'Cập nhật EJS Template' :
                               action.type === 'create_regex' ? (action.regex_data?.scriptName || 'Tạo Regex mới') :
+                              action.type === 'update_regex' ? (action.regex_data?.scriptName || 'Cập nhật Regex') :
+                              action.type === 'delete_regex' ? 'Xóa Regex' :
                               (action.target_comment || action.data?.comment || "Hành động hệ thống")}
                            </span>
+                           {action.reason && (
+                             <p className="text-[9px] text-slate-500 mt-1 italic font-sans">
+                               Lý do: {action.reason}
+                             </p>
+                           )}
                          </div>
                       </div>
-                    ))}
+                     ))}
+                     
+                     {msg.approvalStatus === 'pending' && (
+                       <div className="flex gap-2 pt-2.5 border-t border-white/[0.03]">
+                         <button
+                           onClick={() => handleApproveActions(msg.id)}
+                           className="flex-1 py-1.5 px-3 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all duration-200 click-bounce"
+                           disabled={loading}
+                         >
+                           <Check size={11} strokeWidth={2.5} />
+                           Duyệt & Áp dụng
+                         </button>
+                         <button
+                           onClick={() => handleRejectActions(msg.id)}
+                           className="py-1.5 px-3 rounded-lg bg-slate-800/40 hover:bg-red-500/10 border border-white/[0.05] hover:border-red-500/20 text-slate-400 hover:text-red-400 text-[10px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all duration-200 click-bounce"
+                           disabled={loading}
+                         >
+                           <X size={11} strokeWidth={2.5} />
+                           Từ chối
+                         </button>
+                       </div>
+                     )}
                   </div>
                 )}
               </div>
