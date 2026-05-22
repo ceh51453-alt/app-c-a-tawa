@@ -1,5 +1,5 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Modal } from './ui/Modal';
 import { Textarea } from './ui/Input';
 import { Button } from './ui/Button';
@@ -21,8 +21,14 @@ export const AIGeneratorModal: React.FC<AIGeneratorModalProps> = ({
   onGenerate
 }) => {
   const [prompt, setPrompt] = useState('');
-  const [minTokens, setMinTokens] = useState(2000); // Default minimum 2000 tokens
+  const [minTokens, setMinTokens] = useState(settings.minTokens || 2000); // Default minimum from settings
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (isOpen) {
+      setMinTokens(settings.minTokens || 2000);
+    }
+  }, [isOpen, settings.minTokens]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [streamingContent, setStreamingContent] = useState('');

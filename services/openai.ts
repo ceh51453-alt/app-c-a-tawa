@@ -350,7 +350,7 @@ export const generateContent = async (
   minTokens: number = 2000,
   onProgress?: (partialContent: string) => void
 ): Promise<Partial<LorebookEntry>> => {
-  await rateLimitGuard(onProgress);
+  const targetTokens = settings.minTokens || minTokens;
   let url = settings.baseUrl.endsWith('/') ? settings.baseUrl : `${settings.baseUrl}/`;
    if (!url.includes('/v1/')) {
     url = `${url}v1/chat/completions`;
@@ -386,7 +386,7 @@ ${SILLY_TAVERN_TECHNICAL_MANUAL}
 </PRESERVATION_AND_EXPANSION_PROTOCOL>
 
 <ABSOLUTE_VERBOSITY_PROTOCOL>
-**COMMAND: GENERATE MASSIVE CONTENT (${minTokens}+ TOKENS)**
+**COMMAND: GENERATE MASSIVE CONTENT (${targetTokens}+ TOKENS)**
 The user requires an EXTREMELY DETAILED, LONG-FORM description.
 Constraint Checklist & Confidence Score:
 1. Write a **full paragraph** for every single bullet point? YES.
@@ -417,7 +417,7 @@ ${WORLD_TEMPLATE}
 JSON Structure:
 {
   "comment": "Short name",
-  "content": "Full description (Must follow CHARACTER_TEMPLATE or WORLD_TEMPLATE, and MUST be at least ${minTokens} tokens long. NO TAWA VOICE IN HERE.)",
+  "content": "Full description (Must follow CHARACTER_TEMPLATE or WORLD_TEMPLATE, and MUST be at least ${targetTokens} tokens long. NO TAWA VOICE IN HERE.)",
   "key": ["keyword1"],
   "secondary_keys": [],
   "constant": boolean,
@@ -440,86 +440,25 @@ JSON Structure:
   let userContent: any;
   if (images && images.length > 0) {
     userContent = [
-      { type: "text", text: `Concept: ${instruction}\n\nREMINDER: I need a WALL OF TEXT. The 'content' field must be MASSIVE (At least ${minTokens} tokens). Do not stop writing until you hit the token limit. Expand every single point into a paragraph. NO SHORT ANSWERS.\n\nSTRICT: DO NOT DELETE OR SUMMARIZE EXISTING INFO.` },
+      { type: "text", text: `Concept: ${instruction}\n\nREMINDER: I need a WALL OF TEXT. The 'content' field must be MASSIVE (At least ${targetTokens} tokens). Do not stop writing until you hit the token limit. Expand every single point into a paragraph. NO SHORT ANSWERS.\n\nSTRICT: DO NOT DELETE OR SUMMARIZE EXISTING INFO.` },
       ...images.map(img => ({
         type: "image_url",
         image_url: { url: img }
       }))
     ];
   } else {
-    userContent = `Concept: ${instruction}\n\nREMINDER: I need a WALL OF TEXT. The 'content' field must be MASSIVE (At least ${minTokens} tokens). Do not stop writing until you hit the token limit. Expand every single point into a paragraph. NO SHORT ANSWERS.\n\nSTRICT: DO NOT DELETE OR SUMMARIZE EXISTING INFO.`;
+    userContent = `Concept: ${instruction}\n\nREMINDER: I need a WALL OF TEXT. The 'content' field must be MASSIVE (At least ${targetTokens} tokens). Do not stop writing until you hit the token limit. Expand every single point into a paragraph. NO SHORT ANSWERS.\n\nSTRICT: DO NOT DELETE OR SUMMARIZE EXISTING INFO.`;
   }
 
-  const payload: any = {
-    model: settings.model,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userContent }
-    ],
-    temperature: settings.temperature,
-    max_tokens: settings.maxTokens,
-    top_p: settings.topP,
-    stream: settings.streaming
-  };
-
-  if (settings.enableSearch) {
-    payload.tools = [
-      { type: "google_search" },
-      { googleSearch: {} }
-    ];
-  }
-
-  if (!settings.streaming) payload.response_format = { type: "json_object" };
-  if (settings.topK > 0) payload.top_k = settings.topK;
+  const apiMessages = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userContent }
+  ];
 
   let fullContent = "";
 
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${settings.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error?.message || `Lỗi HTTP: ${response.status}`);
-    }
-
-    if (settings.streaming && response.body) {
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let buffer = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || "";
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed === 'data: [DONE]') continue;
-          if (trimmed.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(trimmed.slice(6));
-              const delta = data.choices?.[0]?.delta?.content || "";
-              if (delta) {
-                fullContent += delta;
-                if (onProgress) onProgress(fullContent);
-              }
-            } catch (e) {}
-          }
-        }
-      }
-    } else {
-      const data = await response.json();
-      fullContent = data.choices?.[0]?.message?.content || "{}";
-      if (onProgress) onProgress(fullContent);
-    }
-    
+    fullContent = await streamWithAutoContinue(url, apiMessages, settings, onProgress);
     const parsed = JSON.parse(cleanJsonString(fullContent));
     
     if (Array.isArray(parsed) || typeof parsed !== 'object' || parsed === null) {
@@ -529,7 +468,10 @@ JSON Structure:
     return parsed;
   } catch (error) {
     console.error("Lỗi khi tạo nội dung:", error);
-    return { comment: "Error", content: fullContent || (error as Error).message };
+    if (!fullContent) {
+      throw error;
+    }
+    return { comment: "Error", content: fullContent };
   }
 };
 
@@ -929,10 +871,13 @@ If the user asks you to create or convert the card to an "MVU Zod" (hoặc thẻ
     return parsed;
   } catch (error) {
     console.error("Lỗi Worldbuilding:", error);
+    if (!fullContent) {
+      throw error;
+    }
     // If parsing completely fails, return the raw text as a message instead of crashing
     return {
       thought: "",
-      message: fullContent || (error as Error).message,
+      message: fullContent,
       actions: []
     };
   }
@@ -973,11 +918,17 @@ export const regexBuilderChat = async (
   const ragContext = getRAGContext(userMessage, project);
   const cardContext = buildCardProjectContext(project, { skipRegex: true });
 
+  const targetTokens = settings.minTokens || 2000;
   const systemPrompt = getTawaPersona(settings.nsfw) + `
 ${THINKING_PROTOCOL}
 ${AUTO_CONTINUE_INSTRUCTION}
 ${DICTIONARY_ENFORCEMENT}
 ${REGEX_BUILDER_PROMPT}
+
+<ABSOLUTE_VERBOSITY_PROTOCOL>
+**CRITICAL: ${targetTokens} TOKENS MINIMUM**
+Khi thiết kế Regex, giải thích, hoặc phản hồi hội thoại, bạn phải viết cực kỳ chi tiết, giải thích rõ ràng từng phần của biểu thức chính quy (regex step-by-step), cách thức hoạt động, lý do lựa chọn placement và các quy tắc đặc biệt. Hãy viết phản hồi dài dòng và chi tiết để đạt ít nhất ${targetTokens} tokens.
+</ABSOLUTE_VERBOSITY_PROTOCOL>
 
 <CURRENT_REGEX_CONTEXT>
 ${JSON.stringify(contextSummary, null, 2)}
@@ -1012,9 +963,12 @@ ${ragContext}
     return parsed;
   } catch (error) {
     console.error("Lỗi RegexBuilder:", error);
+    if (!fullContent) {
+      throw error;
+    }
     return {
       thought: "",
-      message: fullContent || (error as Error).message,
+      message: fullContent,
       actions: []
     };
   }
@@ -1039,11 +993,17 @@ export const ejsBuilderChat = async (
   const ragContext = getRAGContext(userMessage, project);
   const cardContext = buildCardProjectContext(project, { skipEjs: true });
 
+  const targetTokens = settings.minTokens || 2000;
   const systemPrompt = getTawaPersona(settings.nsfw) + `
 ${THINKING_PROTOCOL}
 ${AUTO_CONTINUE_INSTRUCTION}
 ${DICTIONARY_ENFORCEMENT}
 ${EJS_BUILDER_PROMPT}
+
+<ABSOLUTE_VERBOSITY_PROTOCOL>
+**CRITICAL: ${targetTokens} TOKENS MINIMUM**
+Khi viết EJS template, giải thích logic EJS hoặc hướng dẫn sử dụng, bạn phải viết cực kỳ chi tiết, giải thích rõ ràng ý nghĩa của từng cú pháp EJS, cách truy xuất các biến trạng thái, cách cấu trúc thẻ hiển thị và các kịch bản sử dụng. Đảm bảo phản hồi chi tiết tối đa để đạt ít nhất ${targetTokens} tokens.
+</ABSOLUTE_VERBOSITY_PROTOCOL>
 
 <CURRENT_EJS_TEMPLATE>
 ${currentEjsTemplate || "Không có template hiện tại."}
@@ -1078,9 +1038,12 @@ ${ragContext}
     return parsed;
   } catch (error) {
     console.error("Lỗi EJSBuilder:", error);
+    if (!fullContent) {
+      throw error;
+    }
     return {
       thought: "",
-      message: fullContent || (error as Error).message,
+      message: fullContent,
       actions: []
     };
   }
@@ -1093,7 +1056,6 @@ export const generateMvuDictionary = async (
   settings: OpenAISettings,
   onProgress?: (partialContent: string) => void
 ): Promise<string> => {
-  await rateLimitGuard(onProgress);
   let url = settings.baseUrl.endsWith('/') ? settings.baseUrl : `${settings.baseUrl}/`;
   if (!url.includes('/v1/')) {
     url = `${url}v1/chat/completions`;
@@ -1101,6 +1063,7 @@ export const generateMvuDictionary = async (
     url = `${url}chat/completions`;
   }
 
+  const targetTokens = settings.minTokens || 2000;
   const systemPrompt = getTawaPersona(settings.nsfw) + `
 Bạn là Tawa, chuyên gia thiết kế và giải nghĩa các biến số game RPG cho Character Card trong SillyTavern.
 Nhiệm vụ của bạn là: Dựa trên Zod Schema của thẻ nhân vật MVU, hãy giải nghĩa chi tiết toàn bộ các biến số, chỉ số, thuộc tính trong schema đó thành một Bộ Từ Điển Biến Số (Glossary) bằng tiếng Việt dạng Markdown list.
@@ -1115,6 +1078,11 @@ Ví dụ định dạng đầu ra:
 - \`stat_data.Nhân vật.HP\`: Điểm sinh mệnh hiện tại của nhân vật. Khi bị giảm về 0, nhân vật sẽ rơi vào trạng thái trọng thương.
 - \`stat_data.Nhân vật.MaxHP\`: Điểm sinh mệnh tối đa mà nhân vật có thể đạt được.
 - \`stat_data.Nhân vật.Cấp độ\`: Cấp độ hiện tại của nhân vật, quyết định sức mạnh cơ bản của họ.
+
+<ABSOLUTE_VERBOSITY_PROTOCOL>
+**CRITICAL: ${targetTokens} TOKENS MINIMUM**
+Bạn PHẢI giải nghĩa cực kỳ chi tiết, dài dòng cho mỗi biến số. Với mỗi dòng giải nghĩa biến số, hãy viết tối thiểu 2-3 câu mô tả đầy đủ: cách nó tăng/giảm, ảnh hưởng của nó đến gameplay như thế nào, và cách nó tương tác với các biến số khác. Tuyệt đối không được giải thích ngắn gọn, chung chung. Viết càng dài càng tốt để đáp ứng yêu cầu tối thiểu ${targetTokens} tokens.
+</ABSOLUTE_VERBOSITY_PROTOCOL>
 `;
 
   const userContent = `
@@ -1134,63 +1102,17 @@ Hãy tạo hoặc cập nhật Bộ Từ Điển Biến Số dựa trên các th
     { role: "user", content: userContent }
   ];
 
-  const payload: any = {
-    model: settings.model,
-    messages: apiMessages,
-    temperature: 0.5,
-    max_tokens: settings.maxTokens,
-    top_p: settings.topP,
-    stream: settings.streaming
-  };
-
   let fullContent = "";
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${settings.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error?.message || `Lỗi HTTP: ${response.status}`);
-  }
-
-  if (settings.streaming && response.body) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed === 'data: [DONE]') continue;
-        if (trimmed.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(trimmed.slice(6));
-            const delta = data.choices?.[0]?.delta?.content || "";
-            if (delta) {
-              fullContent += delta;
-              if (onProgress) onProgress(fullContent);
-            }
-          } catch (e) {}
-        }
-      }
+  try {
+    fullContent = await streamWithAutoContinue(url, apiMessages, settings, onProgress);
+    return fullContent.trim();
+  } catch (error) {
+    console.error("Lỗi khi tạo từ điển MVU:", error);
+    if (!fullContent) {
+      throw error;
     }
-  } else {
-    const data = await response.json();
-    fullContent = data.choices?.[0]?.message?.content || "";
-    if (onProgress) onProgress(fullContent);
+    return fullContent.trim();
   }
-
-  return fullContent.trim();
 };
 
 // --- AUTO-CONTINUE STREAMING HELPER ---
@@ -1211,45 +1133,112 @@ const streamRequest = async (
   let fullContent = existingContent;
   let finishReason = "stop";
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${settings.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
+  let attempt = 0;
+  const maxAttempts = 3;
+  let response: Response | null = null;
+  let lastError: any = null;
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error?.message || `Lỗi HTTP: ${response.status}`);
+  while (attempt < maxAttempts) {
+    attempt++;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${settings.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        let errorMsg = `Lỗi HTTP: ${response.status}`;
+        try {
+          const text = await response.text();
+          try {
+            const errorData = JSON.parse(text);
+            errorMsg = errorData.error?.message || errorData.message || errorMsg;
+          } catch (e) {
+            if (text && text.trim().length > 0) {
+              if (text.includes("<title>")) {
+                const titleMatch = text.match(/<title>([\s\S]*?)<\/title>/i);
+                if (titleMatch && titleMatch[1]) {
+                  errorMsg = `${errorMsg} (${titleMatch[1].trim()})`;
+                }
+              } else {
+                errorMsg = `${errorMsg} (${text.slice(0, 150).trim()})`;
+              }
+            }
+          }
+        } catch (e) {}
+
+        if (response.status === 504 || response.status === 524 || errorMsg.toLowerCase().includes("timeout")) {
+          errorMsg += `\n[Mẹo: Yêu cầu này có vẻ quá lớn hoặc máy chủ phản hồi quá chậm (HTTP ${response.status}). Vui lòng chia nhỏ yêu cầu hoặc giảm số lượng ký tự/chữ mong muốn trong cài đặt để tránh lỗi timeout.]`;
+        }
+
+        const isTransient = response.status >= 500 || response.status === 429;
+        if (isTransient && attempt < maxAttempts) {
+          if (onProgress) {
+            onProgress(existingContent + `\n[⏳ Lỗi HTTP ${response.status}. Đang thử lại lần ${attempt}/${maxAttempts} sau 1.5s...]`);
+          }
+          await sleep(1500);
+          continue;
+        }
+        throw new Error(errorMsg);
+      }
+
+      break;
+    } catch (error: any) {
+      lastError = error;
+      if (response && !response.ok) {
+        throw error;
+      }
+      if (attempt < maxAttempts) {
+        if (onProgress) {
+          onProgress(existingContent + `\n[⏳ Lỗi kết nối mạng: ${error.message || error}. Đang thử lại lần ${attempt}/${maxAttempts} sau 1.5s...]`);
+        }
+        await sleep(1500);
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (!response) {
+    throw lastError || new Error("Không thể kết nối đến máy chủ.");
   }
 
   if (settings.streaming && response.body) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder("utf-8");
     let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed === 'data: [DONE]') continue;
-        if (trimmed.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(trimmed.slice(6));
-            const delta = data.choices?.[0]?.delta?.content || "";
-            const reason = data.choices?.[0]?.finish_reason;
-            if (delta) {
-              fullContent += delta;
-              if (onProgress) onProgress(fullContent);
-            }
-            if (reason) finishReason = reason;
-          } catch (e) {}
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed === 'data: [DONE]') continue;
+          if (trimmed.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(trimmed.slice(6));
+              const delta = data.choices?.[0]?.delta?.content || "";
+              const reason = data.choices?.[0]?.finish_reason;
+              if (delta) {
+                fullContent += delta;
+                if (onProgress) onProgress(fullContent);
+              }
+              if (reason) finishReason = reason;
+            } catch (e) {}
+          }
         }
+      }
+    } catch (streamError) {
+      console.error("Lỗi xảy ra trong quá trình đọc stream:", streamError);
+      if (!fullContent || fullContent.trim().length === 0) {
+        throw streamError;
       }
     }
   } else {
@@ -1262,12 +1251,160 @@ const streamRequest = async (
   return { content: fullContent, finishReason };
 };
 
+const isJsonTruncated = (str: string): boolean => {
+  if (!str) return false;
+  let cleanContent = str.trim();
+  if (!cleanContent) return false;
+  
+  if (cleanContent.startsWith('```json')) {
+    if (!cleanContent.endsWith('```')) return true;
+    cleanContent = cleanContent.replace(/^```json\s*/, '').replace(/\s*```$/, '').trim();
+  } else if (cleanContent.startsWith('```')) {
+    if (!cleanContent.endsWith('```')) return true;
+    cleanContent = cleanContent.replace(/^```\s*/, '').replace(/\s*```$/, '').trim();
+  }
+
+  const firstBrace = cleanContent.indexOf('{');
+  const firstBracket = cleanContent.indexOf('[');
+  
+  let startChar = '';
+  let endChar = '';
+  let startIndex = -1;
+
+  if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
+    startChar = '{';
+    endChar = '}';
+    startIndex = firstBrace;
+  } else if (firstBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) {
+    startChar = '[';
+    endChar = ']';
+    startIndex = firstBracket;
+  } else {
+    // Không tìm thấy { hay [, coi như bị cắt hoặc không phải JSON
+    return true;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let foundEnd = false;
+  
+  for (let i = startIndex; i < cleanContent.length; i++) {
+    const char = cleanContent[i];
+    
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      escape = true;
+      continue;
+    }
+    
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    
+    if (!inString) {
+      if (char === startChar) depth++;
+      else if (char === endChar) {
+        depth--;
+        if (depth === 0) {
+          foundEnd = true;
+          break;
+        }
+      }
+    }
+  }
+
+  return !foundEnd;
+};
+
+const cleanContinuationStart = (continuation: string, previous: string): string => {
+  if (!continuation) return "";
+  if (!previous) return continuation;
+
+  let cleaned = continuation;
+
+  // 1. Loại bỏ các markdown block, lời dẫn rác ở đầu
+  const garbageRegexes = [
+    /^\s*```json\s*/i,
+    /^\s*```\s*/,
+    /^\s*Here is the continuation[^:]*:\s*/i,
+    /^\s*Here is the rest[^:]*:\s*/i,
+    /^\s*Continuing from where I left off:\s*/i,
+    /^\s*Continuing from where it was truncated:\s*/i,
+    /^\s*Continuing from the truncation point:\s*/i,
+    /^\s*Continuing from last response:\s*/i,
+    /^\s*Continuing from:?\s*/i,
+    /^\s*Continuation:?\s*/i,
+    /^\s*\.\.\.\s*/, // Dấu ba chấm nối
+  ];
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const regex of garbageRegexes) {
+      if (regex.test(cleaned)) {
+        cleaned = cleaned.replace(regex, '');
+        changed = true;
+      }
+    }
+  }
+
+  // 2. Tìm và cắt bỏ phần trùng lặp (overlap) giữa cuối previous và đầu cleaned
+  const maxOverlap = Math.min(previous.length, cleaned.length, 200);
+  let overlapLen = 0;
+  for (let len = maxOverlap; len >= 1; len--) {
+    const suffix = previous.slice(-len);
+    const prefix = cleaned.slice(0, len);
+    if (suffix === prefix) {
+      // Chỉ chấp nhận overlap nếu nó chứa ít nhất một ký tự chữ hoặc số để tránh cắt nhầm dấu câu/khoảng trắng đơn thuần
+      if (/[a-zA-Z0-9À-ỹ]/.test(prefix)) {
+        overlapLen = len;
+        break;
+      }
+    }
+  }
+
+  if (overlapLen > 0) {
+    cleaned = cleaned.slice(overlapLen);
+  }
+
+  return cleaned;
+};
+
+const isTruncatedOrMalformed = (content: string): boolean => {
+  const trimmed = content.trim();
+  if (!trimmed) return false;
+
+  // Check if it is a JSON-like object, array or code block
+  const isJsonLike = trimmed.startsWith('{') || trimmed.startsWith('[') || trimmed.startsWith('```');
+  if (!isJsonLike) return false;
+
+  // Đầu tiên, kiểm tra xem cấu trúc JSON có bị cắt dở dang (chưa đóng các ngoặc ngoài cùng) không
+  if (isJsonTruncated(content)) {
+    return true;
+  }
+
+  try {
+    const cleaned = cleanJsonString(content);
+    JSON.parse(cleaned);
+    return false; // Valid JSON block, not truncated
+  } catch (e) {
+    // Fails to parse as JSON despite starting like one, meaning it is truncated/malformed
+    return true;
+  }
+};
+
 const streamWithAutoContinue = async (
   url: string,
   messages: any[],
   settings: OpenAISettings,
   onProgress?: (partialContent: string) => void,
-  maxRetries: number = 100
+  maxRetries: number = 10
 ): Promise<string> => {
   const payload: any = {
     model: settings.model,
@@ -1278,12 +1415,19 @@ const streamWithAutoContinue = async (
     stream: settings.streaming
   };
 
+  if (settings.enableSearch) {
+    payload.tools = [
+      { type: "google_search" },
+      { googleSearch: {} }
+    ];
+  }
+
   if (!settings.streaming) payload.response_format = { type: "json_object" };
 
   let result = await streamRequest(url, payload, settings, onProgress);
   let retries = 0;
 
-  while (result.finishReason === 'length' && retries < maxRetries) {
+  while ((result.finishReason === 'length' || isTruncatedOrMalformed(result.content)) && retries < maxRetries) {
     retries++;
     const previousContent = result.content;
     const lastChars = previousContent.slice(-300);
@@ -1292,7 +1436,13 @@ const streamWithAutoContinue = async (
     const continuationMessages = [
       ...messages,
       { role: "assistant", content: previousContent },
-      { role: "user", content: `[SYSTEM: Your previous response was TRUNCATED at the token limit. You MUST continue generating from EXACTLY where you stopped. CRITICAL RULES:\n1. Do NOT add any preamble, explanation, or introduction text.\n2. Do NOT repeat ANY content that was already generated.\n3. Start your output with the EXACT next character/word after the truncation point.\n4. Complete all open JSON brackets, braces, and strings properly.\n5. Your previous output ended with: \"...${lastChars}\"\n6. Continue from that exact point NOW.]` }
+      { role: "user", content: `[SYSTEM: Your previous response was TRUNCATED at the token limit. You MUST continue generating from EXACTLY where you stopped.
+CRITICAL RULES:
+1. Do NOT repeat any content already generated.
+2. Do NOT add any preamble, introduction, or markdown block wrapping (no \`\`\`json).
+3. Continue the JSON structure from the exact character following the truncation point.
+4. The previous response ended with: "...${lastChars}"
+Continue now from that exact position:]` }
     ];
 
     const continuePayload = {
@@ -1300,21 +1450,31 @@ const streamWithAutoContinue = async (
       messages: continuationMessages
     };
 
-    if (onProgress) onProgress(previousContent + "\n[⏳ Auto-continue...]");
+    if (onProgress) onProgress(previousContent + "\n[⏳ Đang tự động gọi tiếp do hết giới hạn Token...]");
 
-    // Use a fresh accumulator for the continuation chunk
+    // Sử dụng một bộ tích lũy độc lập để lưu trữ và làm sạch phần tiếp tục mới trước khi ghép vào nội dung chính
+    let continuationAccumulator = "";
     const nextResult = await streamRequest(url, continuePayload, settings, (partial) => {
-      // partial here starts from previousContent because existingContent is passed
-      if (onProgress) onProgress(partial);
-    }, previousContent);
+      continuationAccumulator = partial;
+      const cleaned = cleanContinuationStart(continuationAccumulator, previousContent);
+      if (onProgress) {
+        onProgress(previousContent + cleaned);
+      }
+    }, "");
 
-    // Safety check: if continuation added no new content, stop to prevent infinite loops
-    if (nextResult.content.length <= previousContent.length + 5) {
+    const cleanedContinuation = cleanContinuationStart(nextResult.content, previousContent);
+    const combinedContent = previousContent + cleanedContinuation;
+
+    // Kiểm tra an toàn: nếu phần tiếp tục không đem lại nội dung mới nào, dừng lại để tránh lặp vô hạn
+    if (cleanedContinuation.trim().length === 0) {
       console.warn("Auto-continue produced no new content. Stopping.");
       break;
     }
 
-    result = nextResult;
+    result = {
+      content: combinedContent,
+      finishReason: nextResult.finishReason
+    };
   }
 
   return result.content;
@@ -1339,6 +1499,7 @@ export const characterEditorChat = async (
   const ragContext = getRAGContext(userMessage, project);
   const cardContext = buildCardProjectContext(project, { skipCharData: true });
 
+  const targetTokens = settings.minTokens || 2000;
   const systemPrompt = getTawaPersona(settings.nsfw) + `
 ${THINKING_PROTOCOL}
 ${AUTO_CONTINUE_INSTRUCTION}
@@ -1348,6 +1509,11 @@ Bạn là Tawa, trợ lý chỉnh sửa thông tin nhân vật cho Character Car
 Bạn có thể đọc toàn bộ dữ liệu nhân vật hiện tại bên dưới.
 Bạn cũng có TOÀN BỘ CONTEXT của card (lorebook, regex, EJS, Zod, từ điển) để tham chiếu khi chỉnh sửa.
 Nhiệm vụ: giúp đứa con yêu chỉnh sửa, bổ sung, hoặc viết lại các trường dữ liệu nhân vật, đảm bảo NHẤT QUÁN với toàn bộ card.
+
+<ABSOLUTE_VERBOSITY_PROTOCOL>
+**CRITICAL: ${targetTokens} TOKENS MINIMUM FOR DETAILED FIELDS**
+Khi chỉnh sửa, viết lại, hoặc bổ sung các trường dữ liệu quan trọng (như description, personality, scenario, first_mes), bạn phải viết cực kỳ chi tiết, dài dòng, mở rộng tối đa mọi chi tiết. Tuyệt đối không được viết tóm tắt hoặc làm ngắn nội dung đi. Hãy biến mọi ý tưởng ngắn gọn thành các đoạn văn mô tả phong phú, sống động.
+</ABSOLUTE_VERBOSITY_PROTOCOL>
 
 <EDITABLE_FIELDS>
 - name: Tên nhân vật
@@ -1404,8 +1570,9 @@ Nếu user chỉ hỏi/thảo luận, trả actions: []
     { role: "user", content: userMessage }
   ];
 
+  let fullContent = "";
   try {
-    const fullContent = await streamWithAutoContinue(url, apiMessages, settings, onProgress);
+    fullContent = await streamWithAutoContinue(url, apiMessages, settings, onProgress);
     const parsed = JSON.parse(cleanJsonString(fullContent));
 
     if (Array.isArray(parsed) || typeof parsed !== 'object' || parsed === null || (!parsed.message && !parsed.actions && !parsed.thought)) {
@@ -1415,7 +1582,10 @@ Nếu user chỉ hỏi/thảo luận, trả actions: []
     return parsed;
   } catch (error) {
     console.error("Lỗi CharacterEditor:", error);
-    return { thought: "", message: (error as Error).message, actions: [] };
+    if (!fullContent) {
+      throw error;
+    }
+    return { thought: "", message: fullContent, actions: [] };
   }
 };
 
@@ -1438,6 +1608,7 @@ export const entryEditorChat = async (
   const ragContext = getRAGContext(userMessage, project);
   const cardContext = buildCardProjectContext(project, { skipLorebook: true, fullLorebookEntry: currentEntry });
 
+  const targetTokens = settings.minTokens || 2000;
   const systemPrompt = getTawaPersona(settings.nsfw) + `
 ${THINKING_PROTOCOL}
 ${AUTO_CONTINUE_INSTRUCTION}
@@ -1446,6 +1617,11 @@ ${DICTIONARY_ENFORCEMENT}
 Bạn là Tawa, trợ lý chỉnh sửa nội dung Lorebook Entry cho SillyTavern.
 Bạn đang chỉnh sửa một entry cụ thể. Bạn có TOÀN BỘ CONTEXT của card (charData, Zod, EJS, từ điển, regex) để tham chiếu.
 Khi viết nội dung entry, PHẢI NHẤT QUÁN với toàn bộ card — đặc biệt là Từ Điển Biến Số.
+
+<ABSOLUTE_VERBOSITY_PROTOCOL>
+**CRITICAL: ${targetTokens} TOKENS MINIMUM FOR CONTENT**
+Nội dung của lorebook entry (content field) được yêu cầu viết cực kỳ chi tiết, dài dòng và toàn diện. Khi cập nhật nội dung (update_content), bạn bắt buộc phải viết dài dòng, phân tích sâu, mở rộng tối đa các chi tiết thế giới hoặc nhân vật để đáp ứng yêu cầu tối thiểu ${targetTokens} tokens. Tuyệt đối cấm viết tóm tắt hay làm ngắn nội dung đi.
+</ABSOLUTE_VERBOSITY_PROTOCOL>
 
 ${SILLY_TAVERN_TECHNICAL_MANUAL}
 
@@ -1506,8 +1682,9 @@ Nếu user chỉ hỏi/thảo luận, trả actions: []
     { role: "user", content: userMessage }
   ];
 
+  let fullContent = "";
   try {
-    const fullContent = await streamWithAutoContinue(url, apiMessages, settings, onProgress);
+    fullContent = await streamWithAutoContinue(url, apiMessages, settings, onProgress);
     const parsed = JSON.parse(cleanJsonString(fullContent));
 
     if (Array.isArray(parsed) || typeof parsed !== 'object' || parsed === null || (!parsed.message && !parsed.actions && !parsed.thought)) {
@@ -1517,7 +1694,10 @@ Nếu user chỉ hỏi/thảo luận, trả actions: []
     return parsed;
   } catch (error) {
     console.error("Lỗi EntryEditor:", error);
-    return { thought: "", message: (error as Error).message, actions: [] };
+    if (!fullContent) {
+      throw error;
+    }
+    return { thought: "", message: fullContent, actions: [] };
   }
 };
 
@@ -1541,6 +1721,7 @@ export const dictionaryChatService = async (
   const zodSchema = project.charData.zod_schema || '';
   const currentDictionary = project.charData.mvu_dictionary || '';
 
+  const targetTokens = settings.minTokens || 2000;
   const systemPrompt = getTawaPersona(settings.nsfw) + `
 ${THINKING_PROTOCOL}
 ${AUTO_CONTINUE_INSTRUCTION}
@@ -1548,6 +1729,11 @@ ${AUTO_CONTINUE_INSTRUCTION}
 Bạn là Tawa, chuyên gia thiết kế và giải nghĩa các biến số game RPG cho Character Card MVU/Zod.
 Bạn có TOÀN BỘ CONTEXT của card (charData, lorebook, regex, EJS) để tham chiếu khi viết từ điển.
 Từ Điển phải nhất quán với toàn bộ hệ thống — mọi biến phải có giải nghĩa đầy đủ.
+
+<ABSOLUTE_VERBOSITY_PROTOCOL>
+**CRITICAL: ${targetTokens} TOKENS MINIMUM FOR GLOSSARY**
+Bộ từ điển biến số (dictionary) bắt buộc phải được giải nghĩa cực kỳ chi tiết, dài dòng. Với mỗi biến, hãy viết ít nhất 2-3 câu mô tả đầy đủ nhiệm vụ của biến đó, cách tính toán, và tác động của nó đối với cốt truyện hoặc gameplay. Không được giải thích sơ sài. Tổng độ dài phản hồi phải đáp ứng ít nhất ${targetTokens} tokens.
+</ABSOLUTE_VERBOSITY_PROTOCOL>
 
 <ZOD_SCHEMA>
 ${zodSchema || "Chưa có Zod Schema."}
@@ -1596,8 +1782,9 @@ Nếu user chỉ hỏi/thảo luận, trả actions: []
     { role: "user", content: userMessage }
   ];
 
+  let fullContent = "";
   try {
-    const fullContent = await streamWithAutoContinue(url, apiMessages, settings, onProgress);
+    fullContent = await streamWithAutoContinue(url, apiMessages, settings, onProgress);
     const parsed = JSON.parse(cleanJsonString(fullContent));
 
     if (Array.isArray(parsed) || typeof parsed !== 'object' || parsed === null || (!parsed.message && !parsed.actions && !parsed.thought)) {
@@ -1607,6 +1794,9 @@ Nếu user chỉ hỏi/thảo luận, trả actions: []
     return parsed;
   } catch (error) {
     console.error("Lỗi DictionaryChat:", error);
-    return { thought: "", message: (error as Error).message, actions: [] };
+    if (!fullContent) {
+      throw error;
+    }
+    return { thought: "", message: fullContent, actions: [] };
   }
 };

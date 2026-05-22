@@ -5,8 +5,11 @@ import { CodeTextarea } from './ui/CodeTextarea';
 import { Button } from './ui/Button';
 import { 
   Plus, Trash2, Send, Bot, User, Loader2, Sparkles, Edit, 
-  HelpCircle, Eye, EyeOff, CheckSquare, Square, Check, AlertCircle, RefreshCw
+  HelpCircle, Eye, EyeOff, CheckSquare, Square, Check, AlertCircle, RefreshCw,
+  Play, Smartphone, FileText, CheckCircle, Copy, Split, AlertTriangle
 } from 'lucide-react';
+import { evaluateMacros, parseSlashRegex, substituteMacros } from '../services/simulator';
+import { buildInitialStateFromSchema } from './CardPreview';
 
 interface RegexBuilderProps {
   project: CardProject;
@@ -24,12 +27,28 @@ export const RegexBuilder: React.FC<RegexBuilderProps> = ({
   setChatMessages,
 }) => {
   const [selectedScriptId, setSelectedScriptId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'edit' | 'chat'>('chat');
+  const [activeTab, setActiveTab] = useState<'edit' | 'chat' | 'debug'>('chat');
   
   // Chat state
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [streamBuffer, setStreamBuffer] = useState('');
+
+  // Debug & Testing State
+  const [debugInputText, setDebugInputText] = useState<string>(
+    `Nhân vật chính cảm thấy linh lực dồi dào, tu vi đột phá!\\n\\n<UpdateVariable>\\n<Analysis>\\nHP tăng 10 điểm, Linh Lực tăng 15 điểm, Tu Vi tăng 20 điểm.\\n</Analysis>\\n<JSONPatch>\\n[\\n  { "op": "delta", "path": "/stat_data/Nhân vật/HP", "value": 10 },\\n  { "op": "delta", "path": "/stat_data/Nhân vật/Linh Lực", "value": 15 },\\n  { "op": "delta", "path": "/stat_data/Nhân vật/Tu Vi", "value": 20 }\\n]\\n</JSONPatch>\\n</UpdateVariable>`
+  );
+  const [debugStateJson, setDebugStateJson] = useState<string>('');
+  const [debugTargetScriptId, setDebugTargetScriptId] = useState<string>('all_active');
+  const [debugPlacement, setDebugPlacement] = useState<number>(2); // Default to Display / Render
+  const [debugResultText, setDebugResultText] = useState<string>('');
+  const [debugTraceLogs, setDebugTraceLogs] = useState<any[]>([]);
+  const [debugViewMode, setDebugViewMode] = useState<'side-by-side' | 'stacked'>('side-by-side');
+  const [debugOutputSubTab, setDebugOutputSubTab] = useState<'preview' | 'diff' | 'trace'>('preview');
+  const [debugError, setDebugError] = useState<string | null>(null);
+  const [copiedDebug, setCopiedDebug] = useState(false);
+
+  const debugIframeRef = useRef<HTMLIFrameElement>(null);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -58,6 +77,433 @@ export const RegexBuilder: React.FC<RegexBuilderProps> = ({
       setSelectedScriptId(project.regexScripts[0].id);
     }
   }, [project.regexScripts, selectedScriptId]);
+
+  // Load simulator message and state helpers
+  const loadLastMessageFromSimulator = () => {
+    try {
+      const historyStr = localStorage.getItem('sillyLore_simulator_history');
+      if (historyStr) {
+        const history = JSON.parse(historyStr);
+        if (Array.isArray(history) && history.length > 0) {
+          const lastMsg = history[history.length - 1];
+          if (lastMsg && lastMsg.content) {
+            setDebugInputText(lastMsg.content);
+            return;
+          }
+        }
+      }
+      alert("Không tìm thấy lịch sử chat giả lập nào trong cache. Hãy vào phòng chat gửi tin nhắn trước.");
+    } catch (e: any) {
+      alert("Lỗi khi đọc lịch sử: " + e.message);
+    }
+  };
+
+  const loadStateFromSimulator = () => {
+    try {
+      const stateStr = localStorage.getItem('sillyLore_simulator_state');
+      if (stateStr) {
+        const parsed = JSON.parse(stateStr);
+        setDebugStateJson(JSON.stringify(parsed, null, 2));
+      } else {
+        const defaultState = buildInitialStateFromSchema(project);
+        setDebugStateJson(JSON.stringify(defaultState, null, 2));
+      }
+    } catch (e) {
+      const defaultState = buildInitialStateFromSchema(project);
+      setDebugStateJson(JSON.stringify(defaultState, null, 2));
+    }
+  };
+
+  // Sync simulator state on mount
+  useEffect(() => {
+    loadStateFromSimulator();
+  }, [project]);
+
+  // Listener to iframe postMessage
+  useEffect(() => {
+    const handleDebugMessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (!data) return;
+      
+      if (data.type === 'DEBUG_STATE_UPDATED' || data.type === 'DEBUG_SETWI_CALLED') {
+        setDebugStateJson(JSON.stringify(data.state, null, 2));
+      } else if (data.type === 'DEBUG_SLASH_COMMAND') {
+        console.log("Debug slash command clicked:", data.command);
+      }
+    };
+    window.addEventListener('message', handleDebugMessage);
+    return () => window.removeEventListener('message', handleDebugMessage);
+  }, []);
+
+  const getHtmlUiFromText = (content: string): string => {
+    if (!content) return '';
+    const match = content.match(/```html\s*([\s\S]*?)\s*```/i);
+    if (match) return match[1];
+    return content;
+  };
+
+  const getTestSrcDoc = () => {
+    const html = getHtmlUiFromText(debugResultText);
+    if (!html) return '';
+
+    let parsedState = {};
+    try {
+      if (debugStateJson.trim()) {
+        parsedState = JSON.parse(debugStateJson);
+      }
+    } catch (e) {}
+
+    const injectedScript = `
+      <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
+      <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.0/dist/jquery.min.js"></script>
+      <script>
+        (function() {
+          const parentWindow = window.parent;
+          window.mvu_state = ${JSON.stringify(parsedState)};
+          
+          if (!window._) {
+            window._ = {
+              get: function(obj, path, defaultValue) {
+                if (!path) return defaultValue;
+                const parts = Array.isArray(path) ? path : path.split('.');
+                let current = obj;
+                for (const part of parts) {
+                  if (current == null) return defaultValue;
+                  current = current[part];
+                }
+                return current !== undefined ? current : defaultValue;
+              }
+            };
+          }
+          
+          const listeners = {};
+          window.Mvu = {
+            events: {
+              VARIABLE_UPDATE_ENDED: 'variable_update_ended'
+            }
+          };
+
+          window.eventOn = function(event, callback) {
+            if (!listeners[event]) listeners[event] = [];
+            listeners[event].push(callback);
+          };
+
+          window.waitGlobalInitialized = async function(moduleName) {
+            return new Promise((resolve) => {
+              setTimeout(resolve, 30);
+            });
+          };
+
+          window.getvar = function(path, options) {
+            if (!path) return undefined;
+            const parts = path.split('.');
+            let current = window.mvu_state;
+            for (const part of parts) {
+              if (current == null) return options?.defaults;
+              current = current[part];
+            }
+            return current !== undefined ? current : (options ? options.defaults : undefined);
+          };
+          
+          window.setvar = function(path, value) {
+            if (!path) return;
+            const parts = path.split('.');
+            let current = window.mvu_state;
+            for (let i = 0; i < parts.length - 1; i++) {
+              const part = parts[i];
+              if (current[part] === undefined) current[part] = {};
+              current = current[part];
+            }
+            current[parts[parts.length - 1]] = value;
+            
+            parentWindow.postMessage({ 
+              type: 'DEBUG_STATE_UPDATED', 
+              state: window.mvu_state,
+              path: path,
+              value: value
+            }, '*');
+
+            if (listeners[window.Mvu.events.VARIABLE_UPDATE_ENDED]) {
+              listeners[window.Mvu.events.VARIABLE_UPDATE_ENDED].forEach(cb => {
+                try { cb(); } catch(e) { console.error("Error in listener:", e); }
+              });
+            }
+          };
+          
+          window.getAllVariables = function() {
+            return window.mvu_state;
+          };
+
+          window.getwi = async function(entryName) {
+            const content = window.mvu_state.wi_entries?.[entryName] || "";
+            return content;
+          };
+
+          window.setwi = async function(entryName, content) {
+            if (!window.mvu_state.wi_entries) window.mvu_state.wi_entries = {};
+            window.mvu_state.wi_entries[entryName] = content;
+            parentWindow.postMessage({ 
+              type: 'DEBUG_SETWI_CALLED', 
+              entryName, 
+              content,
+              state: window.mvu_state
+            }, '*');
+
+            if (listeners[window.Mvu.events.VARIABLE_UPDATE_ENDED]) {
+              listeners[window.Mvu.events.VARIABLE_UPDATE_ENDED].forEach(cb => {
+                try { cb(); } catch(e) { console.error("Error in listener:", e); }
+              });
+            }
+          };
+          
+          window.triggerSlash = function(cmd) {
+            parentWindow.postMessage({ type: 'DEBUG_SLASH_COMMAND', command: cmd }, '*');
+          };
+          
+          window.errorCatched = function(fn) {
+            return function(...args) {
+              try {
+                return fn(...args);
+              } catch (e) {
+                console.error("Lỗi trong Game UI:", e);
+                parentWindow.postMessage({ type: 'DEBUG_UI_ERROR', error: e.message }, '*');
+              }
+            }
+          };
+
+          if (window.jQuery) {
+            window.jQuery.errorCatched = window.errorCatched;
+          }
+
+          if (!window.$) {
+            window.$ = function(selector) {
+              if (typeof selector === 'function') {
+                if (document.readyState === 'complete' || document.readyState === 'interactive') {
+                  selector();
+                } else {
+                  document.addEventListener('DOMContentLoaded', selector);
+                }
+                return;
+              }
+              
+              let els = [];
+              if (typeof selector === 'string') {
+                try {
+                  els = Array.from(document.querySelectorAll(selector));
+                } catch (e) {
+                  console.warn("Invalid selector in mock:", selector);
+                }
+              } else if (selector instanceof HTMLElement || selector instanceof Document || selector instanceof Window) {
+                els = [selector];
+              } else if (selector && typeof selector.length === 'number') {
+                els = Array.from(selector);
+              }
+              
+              const mock = {
+                length: els.length,
+                click: function(fn) {
+                  els.forEach(el => el.addEventListener('click', fn));
+                  return mock;
+                },
+                on: function(event, sel, fn) {
+                  if (typeof sel === 'function') {
+                    els.forEach(el => el.addEventListener(event, sel));
+                  } else {
+                    els.forEach(el => {
+                      el.addEventListener(event, function(e) {
+                        const target = e.target.closest(sel);
+                        if (target && el.contains(target)) {
+                          fn.call(target, e);
+                        }
+                      });
+                    });
+                  }
+                  return mock;
+                },
+                parent: function() {
+                  const parents = els.map(el => el.parentElement).filter(Boolean);
+                  return window.$(parents);
+                },
+                text: function(txt) {
+                  if (txt === undefined) return els[0]?.textContent || '';
+                  els.forEach(el => el.textContent = txt);
+                  return mock;
+                },
+                val: function(v) {
+                  if (v === undefined) return els[0]?.value || '';
+                  els.forEach(el => el.value = v);
+                  return mock;
+                },
+                show: function() {
+                  els.forEach(el => {
+                    el.style.display = '';
+                    if (el.tagName === 'DIV' && el.style.display === 'none') {
+                      el.style.display = 'block';
+                    }
+                  });
+                  return mock;
+                },
+                hide: function() {
+                  els.forEach(el => el.style.display = 'none');
+                  return mock;
+                },
+                empty: function() {
+                  els.forEach(el => el.innerHTML = '');
+                  return mock;
+                },
+                append: function(htmlStr) {
+                  els.forEach(el => {
+                    const temp = document.createElement('div');
+                    temp.innerHTML = htmlStr.trim();
+                    Array.from(temp.childNodes).forEach(node => el.appendChild(node));
+                  });
+                  return mock;
+                },
+                find: function(sel) {
+                  const matched = [];
+                  els.forEach(el => {
+                    try {
+                      matched.push(...Array.from(el.querySelectorAll(sel)));
+                    } catch(e) {}
+                  });
+                  return window.$(matched);
+                },
+                is: function(sel) {
+                  if (sel === ':visible') {
+                    return els.some(el => el.offsetWidth > 0 && el.offsetHeight > 0);
+                  }
+                  if (sel === ':hidden') {
+                    return els.some(el => el.offsetWidth === 0 || el.offsetHeight === 0);
+                  }
+                  return els.some(el => {
+                    try { return el.matches(sel); } catch(e) { return false; }
+                  });
+                },
+                slideToggle: function(speed, cb) {
+                  els.forEach(el => {
+                    if (el.style.display === 'none') {
+                      el.style.display = 'block';
+                    } else {
+                      el.style.display = 'none';
+                    }
+                  });
+                  if (cb) cb();
+                  return mock;
+                }
+              };
+              return mock;
+            };
+          }
+
+          window.parent = window;
+        })();
+      </script>
+    `;
+
+    const insertIndex = html.toLowerCase().indexOf('<head>');
+    if (insertIndex !== -1) {
+      return html.substring(0, insertIndex + 6) + injectedScript + html.substring(insertIndex + 6);
+    } else {
+      const bodyIndex = html.toLowerCase().indexOf('<body>');
+      if (bodyIndex !== -1) {
+        return html.substring(0, bodyIndex) + injectedScript + html.substring(bodyIndex);
+      }
+      return injectedScript + html;
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'debug' && debugIframeRef.current) {
+      debugIframeRef.current.srcdoc = getTestSrcDoc();
+    }
+  }, [debugResultText, debugStateJson, activeTab]);
+
+  const runRegexTest = () => {
+    setDebugError(null);
+    let parsedState = {};
+    if (debugStateJson.trim()) {
+      try {
+        parsedState = JSON.parse(debugStateJson);
+      } catch (e: any) {
+        setDebugError("Lỗi cú pháp JSON ở phần State: " + e.message);
+        return;
+      }
+    }
+
+    const inputText = debugInputText;
+    let currentText = inputText.replace(/\r\n/g, '\n');
+
+    const placement = debugPlacement;
+    const charName = project.charData.name || 'Char';
+    const userName = 'You';
+
+    const scriptsToRun = debugTargetScriptId === 'all_active'
+      ? project.regexScripts.filter(s => s.isactive && s.placement.includes(placement))
+      : project.regexScripts.filter(s => s.id === debugTargetScriptId);
+
+    const logs: any[] = [];
+
+    scriptsToRun.forEach(script => {
+      try {
+        let patternStr = script.findRegex;
+        if (script.substituteRegex) {
+          patternStr = substituteMacros(patternStr, charName, userName, true);
+        }
+
+        let regex: RegExp;
+        const slashRegex = parseSlashRegex(patternStr);
+        if (slashRegex) {
+          regex = new RegExp(slashRegex.pattern, slashRegex.flags);
+        } else {
+          regex = new RegExp(patternStr, 'g');
+        }
+
+        const beforeText = currentText;
+        const matchCount = (beforeText.match(regex) || []).length;
+        
+        let replaceStr = script.replaceString || '';
+        replaceStr = substituteMacros(replaceStr, charName, userName, false);
+        if (parsedState) {
+          replaceStr = evaluateMacros(replaceStr, parsedState);
+        }
+
+        const afterText = beforeText.replace(regex, replaceStr);
+        const matched = beforeText !== afterText;
+
+        logs.push({
+          scriptId: script.id,
+          scriptName: script.scriptName,
+          findRegex: script.findRegex,
+          replaceString: script.replaceString,
+          matched,
+          matchCount,
+          before: beforeText,
+          after: afterText
+        });
+
+        currentText = afterText;
+      } catch (e: any) {
+        logs.push({
+          scriptId: script.id,
+          scriptName: script.scriptName,
+          findRegex: script.findRegex,
+          replaceString: script.replaceString,
+          matched: false,
+          matchCount: 0,
+          before: currentText,
+          after: currentText,
+          error: e.message
+        });
+      }
+    });
+
+    if (parsedState) {
+      currentText = evaluateMacros(currentText, parsedState);
+    }
+
+    setDebugResultText(currentText);
+    setDebugTraceLogs(logs);
+  };
 
   const selectedScript = project.regexScripts.find(s => s.id === selectedScriptId);
 
@@ -383,6 +829,19 @@ export const RegexBuilder: React.FC<RegexBuilderProps> = ({
             >
               Chỉnh sửa thủ công {selectedScript ? `"${selectedScript.scriptName}"` : ''}
             </button>
+            <button
+              onClick={() => {
+                setActiveTab('debug');
+                runRegexTest();
+              }}
+              className={`px-4 py-4 text-xs font-semibold tracking-wider uppercase border-b-2 transition duration-200 click-bounce ${
+                activeTab === 'debug'
+                  ? `border-${themeColor}-500 text-${themeColor}-400`
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Thử nghiệm & Gỡ lỗi Regex
+            </button>
           </div>
           
           <div className={`text-[10px] font-bold tracking-widest uppercase px-3 py-1 rounded-full bg-${themeColor}-500/10 border border-${themeColor}-500/20 text-${themeColor}-400`}>
@@ -686,6 +1145,309 @@ export const RegexBuilder: React.FC<RegexBuilderProps> = ({
                   >
                     <Send size={14} />
                   </button>
+                </div>
+              </div>
+            </div>
+          ) : activeTab === 'debug' ? (
+            <div className="h-full flex flex-col min-h-0 bg-[#04060f]/30">
+              {/* Debug controls bar */}
+              <div className="flex flex-wrap items-center justify-between gap-4 p-4 border-b border-white/[0.04] bg-slate-950/40 shrink-0">
+                <div className="flex flex-wrap items-center gap-3">
+                  {/* Select target script */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Script:</span>
+                    <select
+                      value={debugTargetScriptId}
+                      onChange={(e) => setDebugTargetScriptId(e.target.value)}
+                      className="styled-input rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none bg-slate-900 border border-white/[0.04]"
+                    >
+                      <option value="all_active">Tất cả đang hoạt động</option>
+                      {project.regexScripts.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.scriptName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Select execution placement */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Placement:</span>
+                    <select
+                      value={debugPlacement}
+                      onChange={(e) => setDebugPlacement(parseInt(e.target.value))}
+                      className="styled-input rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none bg-slate-900 border border-white/[0.04]"
+                    >
+                      <option value={0}>0: User Input (Trước)</option>
+                      <option value={1}>1: AI Output (Trước)</option>
+                      <option value={2}>2: Display / Render</option>
+                      <option value={3}>3: Prompt Insert</option>
+                      <option value={4}>4: System Prompt</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2.5">
+                  {/* View mode toggle */}
+                  <button
+                    onClick={() => setDebugViewMode(debugViewMode === 'side-by-side' ? 'stacked' : 'side-by-side')}
+                    className="p-2 rounded-xl border border-white/[0.04] bg-slate-900/60 text-slate-400 hover:text-slate-200 hover:bg-slate-900 transition click-bounce"
+                    title={debugViewMode === 'side-by-side' ? 'Chuyển sang dạng Xếp chồng' : 'Chuyển sang dạng Song song'}
+                  >
+                    <Split size={14} />
+                  </button>
+
+                  {/* Run test button */}
+                  <Button
+                    variant={themeColor}
+                    size="sm"
+                    className="flex items-center gap-1.5 px-4.5 py-2 rounded-xl click-bounce font-medium text-xs shadow-lg"
+                    onClick={runRegexTest}
+                  >
+                    <Play size={13} fill="currentColor" />
+                    <span>Chạy thử nghiệm</span>
+                  </Button>
+                </div>
+              </div>
+
+              {/* Main content split panel */}
+              <div className={`flex-grow overflow-hidden flex ${debugViewMode === 'side-by-side' ? 'flex-row' : 'flex-col'} min-h-0`}>
+                {/* Left Pane (Inputs) */}
+                <div className={`flex flex-col min-h-0 border-white/[0.04] ${
+                  debugViewMode === 'side-by-side' ? 'w-1/2 border-r h-full' : 'h-1/2 border-b w-full'
+                } bg-slate-950/20`}>
+                  
+                  {/* Test Input Text */}
+                  <div className="flex-1 flex flex-col min-h-0 p-4 border-b border-white/[0.04]">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                        <FileText size={12} className={`text-${themeColor}-400`} />
+                        Văn bản thử nghiệm (Input Text)
+                      </span>
+                      <button
+                        onClick={loadLastMessageFromSimulator}
+                        className="text-[10px] font-semibold text-slate-400 hover:text-slate-200 flex items-center gap-1 px-2.5 py-1 rounded-lg border border-white/[0.03] bg-white/[0.01] hover:bg-white/[0.03] transition click-bounce"
+                      >
+                        <RefreshCw size={10} />
+                        Lấy tin nhắn giả lập gần nhất
+                      </button>
+                    </div>
+                    <textarea
+                      value={debugInputText}
+                      onChange={(e) => setDebugInputText(e.target.value)}
+                      className="w-full flex-grow bg-slate-950/50 border border-white/[0.04] rounded-2xl p-4 font-mono text-[11px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-white/[0.08] resize-none overflow-y-auto custom-scrollbar"
+                      placeholder="Dán hoặc viết văn bản chứa các tag MVU/Zod như <UpdateVariable> tại đây..."
+                    />
+                  </div>
+
+                  {/* Simulator State JSON */}
+                  <div className="flex-1 flex flex-col min-h-0 p-4">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                        <Smartphone size={12} className={`text-${themeColor}-400`} />
+                        Trạng thái giả lập (Mock State JSON)
+                      </span>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={loadStateFromSimulator}
+                          className="text-[10px] font-semibold text-slate-400 hover:text-slate-200 flex items-center gap-1 px-2.5 py-1 rounded-lg border border-white/[0.03] bg-white/[0.01] hover:bg-white/[0.03] transition click-bounce"
+                        >
+                          <RefreshCw size={10} />
+                          Đồng bộ từ giả lập
+                        </button>
+                        <button
+                          onClick={() => {
+                            const defaultState = buildInitialStateFromSchema(project);
+                            setDebugStateJson(JSON.stringify(defaultState, null, 2));
+                          }}
+                          className="text-[10px] font-semibold text-slate-400 hover:text-slate-200 flex items-center gap-1 px-2.5 py-1 rounded-lg border border-white/[0.03] bg-white/[0.01] hover:bg-white/[0.03] transition click-bounce"
+                          title="Reset về State mặc định sinh ra từ Zod Schema"
+                        >
+                          Reset Schema Zod
+                        </button>
+                      </div>
+                    </div>
+                    <textarea
+                      value={debugStateJson}
+                      onChange={(e) => setDebugStateJson(e.target.value)}
+                      className="w-full flex-grow bg-slate-950/50 border border-white/[0.04] rounded-2xl p-4 font-mono text-[11px] text-slate-200 placeholder-slate-600 focus:outline-none focus:border-white/[0.08] resize-none overflow-y-auto custom-scrollbar"
+                      placeholder="State JSON của hệ thống..."
+                    />
+                  </div>
+                </div>
+
+                {/* Right Pane (Outputs) */}
+                <div className={`flex flex-col min-h-0 ${
+                  debugViewMode === 'side-by-side' ? 'w-1/2 h-full' : 'h-1/2 w-full'
+                } bg-slate-950/10`}>
+                  
+                  {/* Outputs sub-tabs bar */}
+                  <div className="flex border-b border-white/[0.04] bg-slate-950/40 px-4 shrink-0 justify-between items-center h-11">
+                    <div className="flex gap-2">
+                      {[
+                        { id: 'preview', label: 'Giao diện (HTML Preview)' },
+                        { id: 'diff', label: 'So sánh kết quả (Diff)' },
+                        { id: 'trace', label: 'Nhật ký chạy (Trace Logs)' }
+                      ].map((sub) => (
+                        <button
+                          key={sub.id}
+                          onClick={() => setDebugOutputSubTab(sub.id as any)}
+                          className={`px-3 py-2 text-[10px] font-bold uppercase tracking-wider border-b-2 transition duration-200 click-bounce ${
+                            debugOutputSubTab === sub.id
+                              ? `border-${themeColor}-500 text-${themeColor}-400`
+                              : 'border-transparent text-slate-500 hover:text-slate-300'
+                          }`}
+                        >
+                          {sub.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {debugError && (
+                      <div className="flex items-center gap-1.5 text-[10px] font-semibold text-red-400 bg-red-950/20 border border-red-500/20 px-2 py-0.5 rounded-lg">
+                        <AlertTriangle size={11} />
+                        <span className="truncate max-w-[200px]">{debugError}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Sub-tab content */}
+                  <div className="flex-1 overflow-hidden relative p-4 flex flex-col min-h-0">
+                    {debugOutputSubTab === 'preview' && (
+                      <div className="w-full h-full flex flex-col min-h-0 bg-slate-900/40 border border-white/[0.04] rounded-2xl overflow-hidden relative">
+                        {getHtmlUiFromText(debugResultText) ? (
+                          <iframe
+                            ref={debugIframeRef}
+                            title="Regex Sandbox Preview"
+                            className="w-full h-full border-none bg-white"
+                            sandbox="allow-scripts"
+                          />
+                        ) : (
+                          <div className="flex flex-col items-center justify-center h-full text-slate-500 text-xs p-6 text-center space-y-2">
+                            <EyeOff size={24} className="text-slate-600" />
+                            <span>Văn bản kết quả không chứa mã HTML/CSS hợp lệ hoặc thẻ UI Panel.</span>
+                            <span className="text-[10px] text-slate-600">Đảm bảo regex đã chạy thành công và trả về chuỗi HTML.</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {debugOutputSubTab === 'diff' && (
+                      <div className="w-full h-full flex flex-col md:flex-row gap-4 min-h-0">
+                        {/* Original vs Modified */}
+                        <div className="flex-1 flex flex-col min-h-0">
+                          <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">Văn bản ban đầu (Original)</span>
+                          <div className="w-full flex-grow bg-slate-950/60 border border-white/[0.04] rounded-xl p-3 font-mono text-[10px] text-slate-400 overflow-auto whitespace-pre-wrap custom-scrollbar select-text">
+                            {debugInputText}
+                          </div>
+                        </div>
+                        <div className="flex-1 flex flex-col min-h-0">
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Văn bản sau xử lý (Modified)</span>
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(debugResultText);
+                                setCopiedDebug(true);
+                                setTimeout(() => setCopiedDebug(false), 2000);
+                              }}
+                              className="text-[9px] font-semibold text-slate-400 hover:text-slate-200 flex items-center gap-1 px-2 py-0.5 rounded border border-white/[0.03] bg-white/[0.01] transition click-bounce"
+                            >
+                              {copiedDebug ? (
+                                <>
+                                  <Check size={10} className="text-green-400" />
+                                  <span className="text-green-400">Đã sao chép</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy size={10} />
+                                  <span>Sao chép</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                          <div className="w-full flex-grow bg-slate-950/60 border border-white/[0.04] rounded-xl p-3 font-mono text-[10px] text-slate-300 overflow-auto whitespace-pre-wrap custom-scrollbar select-text">
+                            {debugResultText}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {debugOutputSubTab === 'trace' && (
+                      <div className="w-full h-full overflow-y-auto space-y-3.5 custom-scrollbar pr-1 select-text">
+                        {debugTraceLogs.length === 0 ? (
+                          <div className="flex flex-col items-center justify-center h-full text-slate-500 text-xs py-12 text-center space-y-2">
+                            <AlertCircle size={20} className="text-slate-600" />
+                            <span>Chưa chạy thử nghiệm nào. Bấm nút "Chạy thử nghiệm" ở trên để kiểm tra trace.</span>
+                          </div>
+                        ) : (
+                          debugTraceLogs.map((log, idx) => (
+                            <div
+                              key={idx}
+                              className={`p-3.5 rounded-2xl border transition-all ${
+                                log.error 
+                                  ? 'bg-red-500/[0.02] border-red-500/20 text-red-300' 
+                                  : log.matched 
+                                    ? `bg-${themeColor}-500/[0.02] border-${themeColor}-500/25` 
+                                    : 'bg-white/[0.01] border-white/[0.03]'
+                              }`}
+                            >
+                              <div className="flex justify-between items-center gap-2 mb-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] font-bold text-slate-300">
+                                    #{idx + 1}: {log.scriptName}
+                                  </span>
+                                  <span className="text-[9px] text-slate-500 font-mono">({log.scriptId})</span>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  {log.error ? (
+                                    <span className="px-2 py-0.5 rounded bg-red-500/10 text-red-400 text-[9px] font-bold border border-red-500/20">Lỗi</span>
+                                  ) : log.matched ? (
+                                    <span className="px-2 py-0.5 rounded bg-green-500/10 text-green-400 text-[9px] font-bold border border-green-500/20">Khớp {log.matchCount} lần</span>
+                                  ) : (
+                                    <span className="px-2 py-0.5 rounded bg-slate-900 text-slate-500 text-[9px] font-bold border border-white/[0.02]">Không khớp</span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {log.error && (
+                                <div className="text-[10px] font-mono text-red-400 bg-red-950/20 p-2 rounded-lg border border-red-900/30 mb-2">
+                                  {log.error}
+                                </div>
+                              )}
+
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[9px] font-mono mb-2">
+                                <div className="bg-black/30 p-1.5 rounded border border-white/[0.02] truncate">
+                                  <span className="text-slate-500 mr-1">Find:</span>/{log.findRegex}/
+                                </div>
+                                <div className="bg-black/30 p-1.5 rounded border border-white/[0.02] truncate">
+                                  <span className="text-slate-500 mr-1">Replace:</span>{log.replaceString || '""'}
+                                </div>
+                              </div>
+
+                              {log.matched && (
+                                <div className="mt-2.5 pt-2.5 border-t border-white/[0.04] space-y-2">
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                                    <div>
+                                      <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-1 block">Trước</span>
+                                      <div className="p-2 rounded bg-black/40 border border-white/[0.02] text-[10px] font-mono text-slate-400 max-h-[80px] overflow-y-auto whitespace-pre-wrap select-all">
+                                        {log.before}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <span className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-1 block">Sau</span>
+                                      <div className="p-2 rounded bg-black/40 border border-white/[0.02] text-[10px] font-mono text-slate-300 max-h-[80px] overflow-y-auto whitespace-pre-wrap select-all">
+                                        {log.after}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

@@ -37,7 +37,7 @@ export function parseZodSchema(schemaText: string): ExtractedVariable[] {
     if (!line) continue;
     
     // Check if we are opening a z.object
-    const objectMatch = line.match(/^([\w\u00C0-\u1EF9]+|['"][\s\S]+?['"])\s*:\s*z\s*\.\s*object\s*\(\s*\{/);
+    const objectMatch = line.match(/^([\w\u00C0-\u1EF9\u4e00-\u9fa5]+|['"][\s\S]+?['"])\s*:\s*z\s*\.\s*object\s*\(\s*\{/);
     if (objectMatch) {
       const rawKey = objectMatch[1];
       const key = rawKey.replace(/['"]/g, ''); // strip quotes
@@ -52,7 +52,7 @@ export function parseZodSchema(schemaText: string): ExtractedVariable[] {
     }
     
     // Check for a leaf property
-    const leafMatch = line.match(/^([\w\u00C0-\u1EF9]+|['"][\s\S]+?['"])\s*:\s*z\s*\.\s*(.+)$/);
+    const leafMatch = line.match(/^([\w\u00C0-\u1EF9\u4e00-\u9fa5]+|['"][\s\S]+?['"])\s*:\s*z\s*\.\s*(.+)$/);
     if (leafMatch) {
       const rawKey = leafMatch[1];
       const key = rawKey.replace(/['"]/g, '');
@@ -104,7 +104,7 @@ export function parseDescriptions(dictionaryText: string): Record<string, string
   for (const line of lines) {
     const trimmed = line.trim();
     // Matches: "- stat_data.X: description" or "- `stat_data.X`: description" or "* stat_data.X - description"
-    const match = trimmed.match(/^[-*+]\s+(?:`?)([\w\u00C0-\u1EF9.]+)(?:`?)\s*[:|-]\s*(.+)$/);
+    const match = trimmed.match(/^[-*+]\s+(?:`?)([\w\u00C0-\u1EF9\u4e00-\u9fa5.]+)(?:`?)\s*[:|-]\s*(.+)$/);
     if (match) {
       const path = match[1].trim();
       const desc = match[2].trim();

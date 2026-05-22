@@ -18,10 +18,110 @@ import {
   AlertTriangle, RefreshCw, FileText, Smartphone,
   MessageSquare, Send, Trash, EyeOff, Sparkles, User, Settings
 } from 'lucide-react';
+import { parseZodSchema } from './VariableDictionary';
 
 interface CardPreviewProps {
   project: CardProject;
   settings?: OpenAISettings;
+}
+
+export function buildInitialStateFromSchema(project: CardProject) {
+  const schema = project.charData.zod_schema || '';
+  const parsedVars = parseZodSchema(schema);
+  
+  // Start with hardcoded defaults
+  const state: any = {
+    stat_data: {
+      'Nhân vật': {
+        Tên: project.charData.name || "Nhân vật",
+        HP: 100,
+        MaxHP: 100,
+        'Sức mạnh': 15,
+        'Khéo léo': 10,
+        'Trí tuệ': 12,
+        Vàng: 150,
+        'Cấp độ': 1,
+        'Kinh nghiệm': 0,
+        'Độ hảo cảm': 50
+      },
+      'Định vị thế giới': {
+        'Đại vực hiện tại': "Trung Ương"
+      },
+      'Nhân vật có mặt': {}
+    },
+    wi_entries: {}
+  };
+
+  // If there's a parsed schema, populate it dynamically
+  if (parsedVars.length > 0) {
+    parsedVars.forEach(v => {
+      // Split path (e.g. "stat_data.用户面板.姓名")
+      const parts = v.path.split('.');
+      if (parts.length < 2) return;
+      
+      let current = state;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const part = parts[i];
+        if (current[part] === undefined) {
+          current[part] = {};
+        }
+        current = current[part];
+      }
+      
+      const lastPart = parts[parts.length - 1];
+      
+      // Parse default value based on type
+      let val: any = v.defaultValue;
+      if (val !== undefined && val !== '') {
+        try {
+          // Clean quotes if it is a string representation
+          if (typeof val === 'string') {
+            const trimmed = val.trim();
+            if ((trimmed.startsWith("'") && trimmed.endsWith("'")) || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+              val = trimmed.substring(1, trimmed.length - 1);
+            } else if (trimmed === 'true') {
+              val = true;
+            } else if (trimmed === 'false') {
+              val = false;
+            } else if (!isNaN(Number(trimmed))) {
+              val = Number(trimmed);
+            } else if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+              val = JSON.parse(trimmed);
+            }
+          }
+        } catch (e) {
+          // Fallback to string if JSON parsing fails
+        }
+      } else {
+        // Fallback defaults based on type
+        if (v.type === 'number') val = 0;
+        else if (v.type === 'boolean') val = false;
+        else if (v.type === 'array') val = [];
+        else if (v.type === 'object') val = {};
+        else val = '';
+      }
+      
+      current[lastPart] = val;
+    });
+  }
+  
+  // Make sure Name is synced
+  if (project.charData.name) {
+    if (state.stat_data['Nhân vật']) {
+      state.stat_data['Nhân vật'].Tên = project.charData.name;
+    }
+    // Also sync Chinese keys if they exist
+    if (state.stat_data['用户面板']) {
+      state.stat_data['用户面板'].姓名 = project.charData.name;
+    }
+    // Also sync Quy khư template keys if they exist
+    if (state.stat_data.cultivator) {
+      if (!state.stat_data.cultivator.identity) state.stat_data.cultivator.identity = {};
+      state.stat_data.cultivator.identity.name = project.charData.name;
+    }
+  }
+  
+  return state;
 }
 
 export const CardPreview: React.FC<CardPreviewProps> = ({ project, settings }) => {
@@ -31,28 +131,7 @@ export const CardPreview: React.FC<CardPreviewProps> = ({ project, settings }) =
   
   // Mock ST variables state
   const [mockState, setMockState] = useState<any>(() => {
-    // Try to load initial values from zod_schema or defaults
-    return {
-      stat_data: {
-        'Nhân vật': {
-          Tên: project.charData.name || "Nhân vật",
-          HP: 100,
-          MaxHP: 100,
-          'Sức mạnh': 15,
-          'Khéo léo': 10,
-          'Trí tuệ': 12,
-          Vàng: 150,
-          'Cấp độ': 1,
-          'Kinh nghiệm': 0,
-          'Độ hảo cảm': 50
-        },
-        'Định vị thế giới': {
-          'Đại vực hiện tại': "Trung Ương"
-        },
-        'Nhân vật có mặt': {}
-      },
-      wi_entries: {}
-    };
+    return buildInitialStateFromSchema(project);
   });
 
   // State text area input for editing
@@ -79,6 +158,7 @@ export const CardPreview: React.FC<CardPreviewProps> = ({ project, settings }) =
   // Sync state json string
   useEffect(() => {
     setStateJsonStr(JSON.stringify(mockState, null, 2));
+    localStorage.setItem('sillyLore_simulator_state', JSON.stringify(mockState));
     
     // Post update message to iframe
     if (iframeRef.current && iframeRef.current.contentWindow) {
@@ -89,19 +169,28 @@ export const CardPreview: React.FC<CardPreviewProps> = ({ project, settings }) =
     }
   }, [mockState]);
 
+  // Re-initialize state when project or zod_schema changes
+  useEffect(() => {
+    setMockState(buildInitialStateFromSchema(project));
+  }, [project.id, project.charData.zod_schema]);
+
   // Sync character name into mock state
   useEffect(() => {
     if (project.charData.name) {
-      setMockState((prev: any) => ({
-        ...prev,
-        stat_data: {
-          ...prev.stat_data,
-          'Nhân vật': {
-            ...prev.stat_data?.['Nhân vật'],
-            Tên: project.charData.name
-          }
+      setMockState((prev: any) => {
+        const next = { ...prev };
+        if (next.stat_data?.['Nhân vật']) {
+          next.stat_data['Nhân vật'].Tên = project.charData.name;
         }
-      }));
+        if (next.stat_data?.['用户面板']) {
+          next.stat_data['用户面板'].姓名 = project.charData.name;
+        }
+        if (next.stat_data?.cultivator) {
+          if (!next.stat_data.cultivator.identity) next.stat_data.cultivator.identity = {};
+          next.stat_data.cultivator.identity.name = project.charData.name;
+        }
+        return next;
+      });
     }
   }, [project.charData.name]);
 
@@ -130,6 +219,11 @@ export const CardPreview: React.FC<CardPreviewProps> = ({ project, settings }) =
       handleResetChat();
     }
   }, [project.charData.first_mes]);
+
+  // Sync chatHistory to localStorage for access by RegexBuilder
+  useEffect(() => {
+    localStorage.setItem('sillyLore_simulator_history', JSON.stringify(chatHistory));
+  }, [chatHistory]);
 
   // Scroll to bottom of chat
   useEffect(() => {
@@ -172,11 +266,28 @@ export const CardPreview: React.FC<CardPreviewProps> = ({ project, settings }) =
 
     const injectedScript = `
       <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
+      <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.0/dist/jquery.min.js"></script>
       <script>
         (function() {
           // Initialize mock variables and cache parent window before window.parent override
           const parentWindow = window.parent;
           window.mvu_state = ${JSON.stringify(mockState)};
+          
+          // Robust Lodash-like fallback mock _ in case of offline usage or CDN loading failure
+          if (!window._) {
+            window._ = {
+              get: function(obj, path, defaultValue) {
+                if (!path) return defaultValue;
+                const parts = Array.isArray(path) ? path : path.split('.');
+                let current = obj;
+                for (const part of parts) {
+                  if (current == null) return defaultValue;
+                  current = current[part];
+                }
+                return current !== undefined ? current : defaultValue;
+              }
+            };
+          }
           
           // Event system mock
           const listeners = {};
@@ -280,64 +391,208 @@ export const CardPreview: React.FC<CardPreviewProps> = ({ project, settings }) =
             }
           };
 
-          // Simple jQuery-like mock $
-          window.$ = function(selector) {
-            if (typeof selector === 'function') {
-              if (document.readyState === 'complete' || document.readyState === 'interactive') {
-                selector();
-              } else {
-                document.addEventListener('DOMContentLoaded', selector);
+          // Attach custom functions to jQuery if jQuery loaded successfully
+          if (window.jQuery) {
+            window.jQuery.errorCatched = window.errorCatched;
+          }
+
+          // Robust jQuery-like fallback mock $ in case of offline usage or CDN loading failure
+          if (!window.$) {
+            window.$ = function(selector) {
+              if (typeof selector === 'function') {
+                if (document.readyState === 'complete' || document.readyState === 'interactive') {
+                  selector();
+                } else {
+                  document.addEventListener('DOMContentLoaded', selector);
+                }
+                return;
               }
-              return;
-            }
-            const els = document.querySelectorAll(selector);
-            return {
-              click: function(fn) {
-                els.forEach(el => el.addEventListener('click', fn));
-                return this;
-              },
-              text: function(txt) {
-                if (txt === undefined) return els[0]?.textContent;
-                els.forEach(el => el.textContent = txt);
-                return this;
-              },
-              val: function(v) {
-                if (v === undefined) return els[0]?.value;
-                els.forEach(el => el.value = v);
-                return this;
-              },
-              show: function() {
-                els.forEach(el => el.style.display = '');
-                return this;
-              },
-              hide: function() {
-                els.forEach(el => el.style.display = 'none');
-                return this;
-              },
-              addClass: function(cls) {
-                els.forEach(el => el.classList.add(cls));
-                return this;
-              },
-              removeClass: function(cls) {
-                els.forEach(el => el.classList.remove(cls));
-                return this;
-              },
-              toggleClass: function(cls) {
-                els.forEach(el => el.classList.toggle(cls));
-                return this;
-              },
-              css: function(prop, val) {
-                els.forEach(el => el.style[prop] = val);
-                return this;
-              },
-              html: function(h) {
-                if (h === undefined) return els[0]?.innerHTML;
-                els.forEach(el => el.innerHTML = h);
-                return this;
+              
+              let els = [];
+              if (typeof selector === 'string') {
+                try {
+                  els = Array.from(document.querySelectorAll(selector));
+                } catch (e) {
+                  console.warn("Invalid selector in mock:", selector);
+                }
+              } else if (selector instanceof HTMLElement || selector instanceof Document || selector instanceof Window) {
+                els = [selector];
+              } else if (selector && typeof selector.length === 'number') {
+                els = Array.from(selector);
               }
+              
+              const mock = {
+                length: els.length,
+                click: function(fn) {
+                  els.forEach(el => el.addEventListener('click', fn));
+                  return mock;
+                },
+                on: function(event, sel, fn) {
+                  if (typeof sel === 'function') {
+                    els.forEach(el => el.addEventListener(event, sel));
+                  } else {
+                    els.forEach(el => {
+                      el.addEventListener(event, function(e) {
+                        const target = e.target.closest(sel);
+                        if (target && el.contains(target)) {
+                          fn.call(target, e);
+                        }
+                      });
+                    });
+                  }
+                  return mock;
+                },
+                parent: function() {
+                  const parents = els.map(el => el.parentElement).filter(Boolean);
+                  return window.$(parents);
+                },
+                text: function(txt) {
+                  if (txt === undefined) return els[0]?.textContent || '';
+                  els.forEach(el => el.textContent = txt);
+                  return mock;
+                },
+                val: function(v) {
+                  if (v === undefined) return els[0]?.value || '';
+                  els.forEach(el => el.value = v);
+                  return mock;
+                },
+                show: function() {
+                  els.forEach(el => {
+                    if (el.style) el.style.display = '';
+                  });
+                  return mock;
+                },
+                hide: function() {
+                  els.forEach(el => {
+                    if (el.style) el.style.display = 'none';
+                  });
+                  return mock;
+                },
+                toggle: function(state) {
+                  els.forEach(el => {
+                    if (el.style) {
+                      const show = state === undefined ? el.style.display === 'none' : !!state;
+                      el.style.display = show ? '' : 'none';
+                    }
+                  });
+                  return mock;
+                },
+                slideToggle: function(duration, cb) {
+                  const callback = typeof duration === 'function' ? duration : cb;
+                  els.forEach(el => {
+                    if (el.style) {
+                      const isHidden = window.getComputedStyle(el).display === 'none';
+                      el.style.display = isHidden ? '' : 'none';
+                    }
+                  });
+                  if (typeof callback === 'function') {
+                    try { callback(); } catch (e) {}
+                  }
+                  return mock;
+                },
+                addClass: function(cls) {
+                  const classes = (cls || '').split(' ').filter(Boolean);
+                  els.forEach(el => {
+                    if (el.classList && classes.length > 0) el.classList.add(...classes);
+                  });
+                  return mock;
+                },
+                removeClass: function(cls) {
+                  const classes = (cls || '').split(' ').filter(Boolean);
+                  els.forEach(el => {
+                    if (el.classList && classes.length > 0) el.classList.remove(...classes);
+                  });
+                  return mock;
+                },
+                toggleClass: function(cls) {
+                  els.forEach(el => {
+                    if (el.classList) el.classList.toggle(cls);
+                  });
+                  return mock;
+                },
+                css: function(prop, val) {
+                  els.forEach(el => {
+                    if (el.style) el.style[prop] = val;
+                  });
+                  return mock;
+                },
+                html: function(h) {
+                  if (h === undefined) return els[0]?.innerHTML || '';
+                  els.forEach(el => el.innerHTML = h);
+                  return mock;
+                },
+                data: function(key, val) {
+                  const camelCase = k => k.replace(/-([a-z])/g, g => g[1].toUpperCase());
+                  const dashCase = k => k.replace(/([A-Z])/g, '-$1').toLowerCase();
+                  if (val === undefined) {
+                    const el = els[0];
+                    if (!el) return undefined;
+                    const camelKey = camelCase(key);
+                    const dashKey = dashCase(key);
+                    return el.dataset[key] || el.dataset[camelKey] || el.getAttribute('data-' + key) || el.getAttribute('data-' + dashKey);
+                  }
+                  els.forEach(el => {
+                    if (el.dataset) {
+                      el.dataset[camelCase(key)] = val;
+                    }
+                  });
+                  return mock;
+                },
+                is: function(selector) {
+                  if (els.length === 0) return false;
+                  if (selector === ':visible') {
+                    return els.some(el => {
+                      if (!el.ownerDocument || !el.ownerDocument.defaultView) return false;
+                      const style = el.ownerDocument.defaultView.getComputedStyle(el);
+                      return style && style.display !== 'none' && style.visibility !== 'hidden';
+                    });
+                  }
+                  if (selector === ':hidden') {
+                    return els.some(el => {
+                      if (!el.ownerDocument || !el.ownerDocument.defaultView) return true;
+                      const style = el.ownerDocument.defaultView.getComputedStyle(el);
+                      return !style || style.display === 'none' || style.visibility === 'hidden';
+                    });
+                  }
+                  return els.some(el => {
+                    try {
+                      return el.matches(selector);
+                    } catch (e) {
+                      return false;
+                    }
+                  });
+                },
+                empty: function() {
+                  els.forEach(el => {
+                    el.innerHTML = '';
+                  });
+                  return mock;
+                },
+                append: function(content) {
+                  els.forEach(el => {
+                    if (typeof content === 'string') {
+                      el.insertAdjacentHTML('beforeend', content);
+                    } else if (content instanceof HTMLElement) {
+                      el.appendChild(content);
+                    } else if (content && typeof content.length === 'number') {
+                      for (let i = 0; i < content.length; i++) {
+                        const child = content[i];
+                        if (child instanceof HTMLElement) el.appendChild(child);
+                      }
+                    }
+                  });
+                  return mock;
+                }
+              };
+              
+              els.forEach((el, index) => {
+                mock[index] = el;
+              });
+              
+              return mock;
             };
-          };
-          window.$.errorCatched = window.errorCatched;
+            window.$.errorCatched = window.errorCatched;
+          }
 
           // Listen to state changes pushed from parent
           window.addEventListener('message', function(event) {
@@ -437,10 +692,17 @@ export const CardPreview: React.FC<CardPreviewProps> = ({ project, settings }) =
 
   // --- SIMULATOR CHAT FUNCTIONS ---
 
-  const handleResetChat = () => {
+  const handleResetChat = async () => {
+    const defaultState = buildInitialStateFromSchema(project);
+    setMockState(defaultState);
+
     const defaultFirstMes = project.charData.first_mes || `Xin chào, ta là ${project.charData.name || 'nhân vật'}. Hãy cùng trò chuyện nào!`;
-    const evaluatedFirstMes = evaluateTemplate(defaultFirstMes, project.charData.name, mockState);
-    const processedFirstMes = applyRegexByPlacement(evaluatedFirstMes, project.regexScripts, 1);
+    const evaluatedFirstMes = await evaluateTemplate(defaultFirstMes, project.charData.name || 'Char', defaultState);
+    const processedFirstMes = applyRegexByPlacement(evaluatedFirstMes, project.regexScripts, 1, {
+      depth: 0,
+      charName: project.charData.name,
+      userName: 'You'
+    });
     setChatHistory([
       {
         id: 'first-mes',
@@ -473,7 +735,11 @@ export const CardPreview: React.FC<CardPreviewProps> = ({ project, settings }) =
     const timestamp = new Date().toLocaleTimeString('vi-VN');
     
     // Apply User Input Regex (placement: 0)
-    const processedUserText = applyRegexByPlacement(userText, project.regexScripts, 0);
+    const processedUserText = applyRegexByPlacement(userText, project.regexScripts, 0, {
+      depth: 0,
+      charName: project.charData.name,
+      userName: 'You'
+    });
     if (processedUserText !== userText) {
       setLogs(prev => [...prev, `[${timestamp}] 📝 [Regex User Input] Chuyển đổi đầu vào: "${userText}" -> "${processedUserText}"`]);
     }
@@ -491,21 +757,29 @@ export const CardPreview: React.FC<CardPreviewProps> = ({ project, settings }) =
     setIsGenerating(true);
 
     // 2. Scan Lorebook
-    const { injectedEntries, log: scanLogs } = scanLorebook(updatedHistory, project.lorebook);
+    const { injectedEntries, log: scanLogs } = await scanLorebook(updatedHistory, project.lorebook, mockState, project.charData.name || 'Char', 'You');
     scanLogs.forEach(sLog => {
       setLogs(prev => [...prev, `[${timestamp}] ${sLog}`]);
     });
 
     // 3. Build Prompt
-    const { systemPrompt, postHistoryInstructions, depthEntries, promptInjects } = buildSillyTavernPrompt(
+    const { systemPrompt, postHistoryInstructions, depthEntries, promptInjects } = await buildSillyTavernPrompt(
       project.charData,
       injectedEntries,
       mockState
     );
     
-    const cleanSystemPrompt = applyRegexByPlacement(systemPrompt, project.regexScripts, 2);
+    const cleanSystemPrompt = applyRegexByPlacement(systemPrompt, project.regexScripts, 2, {
+      charName: project.charData.name,
+      userName: 'You',
+      isApiPrompt: true
+    });
     const cleanPostHistoryInstructions = postHistoryInstructions
-      ? applyRegexByPlacement(postHistoryInstructions, project.regexScripts, 2)
+      ? applyRegexByPlacement(postHistoryInstructions, project.regexScripts, 2, {
+          charName: project.charData.name,
+          userName: 'You',
+          isApiPrompt: true
+        })
       : '';
 
     setLastPromptDebug({ 
@@ -517,7 +791,7 @@ export const CardPreview: React.FC<CardPreviewProps> = ({ project, settings }) =
     });
 
     // Splice depth-based entries into transient apiHistory
-    const apiHistory = injectDepthEntries(updatedHistory, depthEntries, project.charData.name || 'Char', mockState);
+    const apiHistory = await injectDepthEntries(updatedHistory, depthEntries, project.charData.name || 'Char', mockState);
 
     // 4. Create empty assistant message
     const assistantMsgId = 'assistant-' + Date.now();
@@ -540,6 +814,8 @@ export const CardPreview: React.FC<CardPreviewProps> = ({ project, settings }) =
         apiHistory,
         postHistoryInstructions,
         project.regexScripts,
+        project.charData.name || 'Char',
+        'You',
         (partialText) => {
           aiRawResponse = partialText;
           setChatHistory(prev => 
@@ -549,7 +825,11 @@ export const CardPreview: React.FC<CardPreviewProps> = ({ project, settings }) =
       );
 
       // Apply AI Output Regex (placement: 1)
-      const processedAiResponse = applyRegexByPlacement(aiRawResponse, project.regexScripts, 1);
+      const processedAiResponse = applyRegexByPlacement(aiRawResponse, project.regexScripts, 1, {
+        depth: 0,
+        charName: project.charData.name,
+        userName: 'You'
+      });
       if (processedAiResponse !== aiRawResponse) {
         setLogs(prev => [...prev, `[${timestamp}] 📝 [Regex AI Output] Chuyển đổi câu trả lời AI.`]);
       }
@@ -604,13 +884,19 @@ export const CardPreview: React.FC<CardPreviewProps> = ({ project, settings }) =
     return cleaned.trim();
   };
 
-  const formatMessageText = (text: string, role: string): React.ReactNode => {
-    const cleaned = cleanMessageContent(text);
+  const formatMessageText = (text: string, role: string, depth: number): React.ReactNode => {
     const placement = role === 'user' ? 0 : 1;
-    const applied = applyRegexByPlacement(cleaned, project.regexScripts, placement);
+    const applied = applyRegexByPlacement(text, project.regexScripts, placement, {
+      depth,
+      charName: project.charData.name,
+      userName: 'You',
+      isUiRender: true,
+      userState: mockState
+    });
+    const cleaned = cleanMessageContent(applied);
     
     // Convert Markdown italics (*text*) to HTML spans
-    const htmlFormatted = applied.replace(/\*([^*]+)\*/g, '<span class="italic text-indigo-300 font-medium">$1</span>');
+    const htmlFormatted = cleaned.replace(/\*([^*]+)\*/g, '<span class="italic text-indigo-300 font-medium">$1</span>');
 
     return (
       <div 
@@ -960,7 +1246,7 @@ export const CardPreview: React.FC<CardPreviewProps> = ({ project, settings }) =
 
                   {/* Body text formatted */}
                   <div className="text-slate-200">
-                    {formatMessageText(msg.content, msg.role)}
+                    {formatMessageText(msg.content, msg.role, chatHistory.length - 1 - index)}
                   </div>
 
                   {/* Streaming indicator */}

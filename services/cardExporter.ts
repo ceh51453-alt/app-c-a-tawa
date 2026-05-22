@@ -108,7 +108,7 @@ export const exportCardV3 = (project: CardProject): string => {
       thScripts.push({
         type: "script",
         enabled: true,
-        name: "ZOD",
+        name: "MVU Zod Schema",
         id: generateScriptId(),
         content: project.charData.zod_schema,
         info: "",
@@ -141,7 +141,40 @@ export const exportCardV3 = (project: CardProject): string => {
   }
 
   // Compile Regex scripts (REAL ST format: disabled instead of isactive)
-  const regexScripts = project.regexScripts.map(script => ({
+  const baseRegexScripts = [...project.regexScripts];
+  if (project.type === 'mvu' || project.type === 'mvu_zod') {
+    const dashboardIndex = baseRegexScripts.findIndex(r =>
+      /Bảng MVUZOD/i.test(r.scriptName) ||
+      /Làm đẹp thanh trạng thái/i.test(r.scriptName) ||
+      (r.findRegex === "<StatusPlaceHolderImpl/>" && !r.promptOnly && r.markdownOnly)
+    );
+    const replacement = `\`\`\`html\n${project.charData.ejs_template || ""}\n\`\`\``;
+    if (dashboardIndex >= 0) {
+      baseRegexScripts[dashboardIndex] = {
+        ...baseRegexScripts[dashboardIndex],
+        replaceString: replacement
+      };
+    } else if (project.charData.ejs_template) {
+      baseRegexScripts.push({
+        id: generateScriptId(),
+        scriptName: "Bảng MVUZOD ",
+        findRegex: "<StatusPlaceHolderImpl/>",
+        replaceString: replacement,
+        trimStrings: [],
+        placement: [2],
+        isactive: true,
+        markdownOnly: true,
+        promptOnly: false,
+        runOnEdit: true,
+        substituteRegex: 0,
+        minDepth: null,
+        maxDepth: 3,
+        runOnSource: false
+      });
+    }
+  }
+
+  const regexScripts = baseRegexScripts.map(script => ({
     id: script.id || generateScriptId(),
     scriptName: script.scriptName,
     findRegex: script.findRegex,
@@ -336,6 +369,30 @@ export const importCardV3 = (jsonStr: string): CardProject => {
   };
 
   charData.zod_schema = zodSchema;
+
+  // Extract EJS template from regex scripts if present
+  const cleanEjsTemplate = (str: string): string => {
+    if (!str) return "";
+    let cleaned = str.trim();
+    const matchStart = cleaned.match(/^```html\s*/i) || cleaned.match(/^```\s*/);
+    if (matchStart) {
+      cleaned = cleaned.substring(matchStart[0].length);
+    }
+    if (cleaned.endsWith('```')) {
+      cleaned = cleaned.substring(0, cleaned.length - 3);
+    }
+    return cleaned.trim();
+  };
+
+  const dashboardRegex = regexScripts.find(r => 
+    /Bảng MVUZOD/i.test(r.scriptName) || 
+    /Làm đẹp thanh trạng thái/i.test(r.scriptName) ||
+    (r.findRegex === "<StatusPlaceHolderImpl/>" && !r.promptOnly && r.markdownOnly)
+  );
+
+  if (dashboardRegex) {
+    charData.ejs_template = cleanEjsTemplate(dashboardRegex.replaceString);
+  }
 
   // Detect EJS in lorebook content
   const hasEjs = entries.some(e => e.content.includes('<%') && e.content.includes('%>'));

@@ -209,11 +209,59 @@ body {
 .bento-card {
   background: rgba(255, 255, 255, 0.015);
   border: 1px solid rgba(255, 255, 255, 0.05);
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  transition: none !important;
 }
 
 .bento-card:hover {
   background: rgba(255, 255, 255, 0.03);
   border-color: rgba(255, 255, 255, 0.1);
   transform: translateY(-2px);
+}
+
+/* Global Reset to Disable Transitions and Animations */
+* {
+  transition: none !important;
+  transition-property: none !important;
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+}
+
+/* Disable slow ambient/pulsing animations */
+.animate-pulse,
+.animate-pulse-slow,
+.animate-bounce,
+.animate-in,
+.fade-in,
+.zoom-in,
+.slide-in-from-bottom-3,
+.bg-glow-orb-1,
+.bg-glow-orb-2 {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* Make background glow orbs static and subtle */
+.bg-glow-orb-1,
+.bg-glow-orb-2 {
+  animation: none !important;
+  transform: none !important;
+  opacity: 0.08 !important;
+}
+
+/* Keep essential loading spinners animated */
+.animate-spin,
+svg.animate-spin,
+.animate-spin-hover:hover {
+  animation: spin 1s linear infinite !important;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }

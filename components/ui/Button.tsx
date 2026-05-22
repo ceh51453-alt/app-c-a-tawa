@@ -1,7 +1,7 @@
 import React from 'react';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'danger' | 'ghost' | 'indigo' | 'emerald';
+  variant?: 'primary' | 'secondary' | 'danger' | 'ghost' | 'indigo' | 'emerald' | 'blue' | 'pink';
   size?: 'sm' | 'md' | 'lg';
   isLoading?: boolean;
   icon?: React.ReactNode;
@@ -23,6 +23,8 @@ export const Button: React.FC<ButtonProps> = ({
     primary: "bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 focus:ring-indigo-500 border border-indigo-500/30 hover:shadow-indigo-500/40",
     indigo: "bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/20 focus:ring-indigo-500 border border-indigo-500/30 hover:shadow-indigo-500/40",
     emerald: "bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-500/20 focus:ring-emerald-500 border border-emerald-500/30 hover:shadow-emerald-500/40",
+    blue: "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20 focus:ring-blue-500 border border-blue-500/30 hover:shadow-blue-500/40",
+    pink: "bg-pink-600 hover:bg-pink-500 text-white shadow-lg shadow-pink-500/20 focus:ring-pink-500 border border-pink-500/30 hover:shadow-pink-500/40",
     secondary: "bg-slate-900/60 hover:bg-slate-800/80 text-slate-200 border border-slate-700/60 focus:ring-slate-500 backdrop-blur-md",
     danger: "bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-500/20 focus:ring-red-500 border border-red-500/30 hover:shadow-red-500/40",
     ghost: "bg-transparent hover:bg-slate-800/60 text-slate-400 hover:text-slate-100 border border-transparent"

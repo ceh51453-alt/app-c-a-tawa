@@ -22,7 +22,7 @@ import { Modal } from './components/ui/Modal';
 import { exportCardV3, importCardV3, importLegacyLorebook } from './services/cardExporter';
 import { 
   Download, Upload, Settings, BookOpen, MessageSquare, Edit, 
-  Languages, HelpCircle, Cpu, Layers, Eye, Code, Sparkles, RefreshCw
+  Languages, HelpCircle, Cpu, Layers, Eye, Code, Sparkles, RefreshCw, Trash2
 } from 'lucide-react';
 
 const DEFAULT_SETTINGS: OpenAISettings = {
@@ -522,24 +522,112 @@ const App: React.FC = () => {
       seeded = [
         {
           id: 'reg-0',
-          scriptName: 'Ẩn keyword trigger',
-          findRegex: keyword,
+          scriptName: 'Xóa status block',
+          findRegex: '/<Status_block>([\\s\\S]*?)</Status_block>/gm',
           replaceString: '',
           trimStrings: [],
           minDepth: null,
           maxDepth: null,
           runOnSource: false,
-          promptOnly: true,
+          promptOnly: false,
           isactive: true,
-          markdownOnly: false,
+          markdownOnly: true,
           runOnEdit: true,
           substituteRegex: 0,
           placement: [2]
         },
         {
           id: 'reg-1',
-          scriptName: 'Ẩn update tags',
-          findRegex: '<UpdateVariable>[\s\S]*?</UpdateVariable>',
+          scriptName: 'Theo dõi cập nhật biến',
+          findRegex: '/<UpdateVariable(?:variable)?>\\s*(.*)\\s*<\\/UpdateVariable(?:variable)?>/gsi',
+          replaceString: `<div style="width: 80%; margin: 20px auto;">
+  <details class="thinking-description" style="
+    background: #2d2d2d;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    transition: 
+      height 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+      box-shadow 0.25s ease;
+    overflow: hidden;
+    will-change: height;
+  ">
+    <summary style="
+      padding: 12px 16px;
+      color: #e0e0e0;
+      cursor: pointer;
+      list-style: none;
+      transition: 
+        background 0.15s ease,
+        border-radius 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      font-weight: 500;
+      position: relative;
+    ">⚙️ Hệ thống cập nhật biến số - <small><span class="thinking-summary" data-close="Nhấp để xem ▶︎ " data-open="Nhấp để ẩn ▼ "></span></small></summary>
+    <div style="
+      max-height: 300px;
+      overflow-y: auto;
+      padding: 12px 16px;
+      color: #b0b0b0;
+      line-height: 1.6;
+      transition: 
+        opacity 0.2s ease,
+        transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      transform: translateY(-8px);
+      opacity: 0;
+      white-space: pre-wrap;">
+    $1
+    </div>
+  </details>
+</div>
+
+<style>
+  .thinking-description::-webkit-scrollbar {
+    width: 6px;
+  }
+  .thinking-description::-webkit-scrollbar-track {
+    background: #2d2d2d;
+  }
+  .thinking-description::-webkit-scrollbar-thumb {
+    background: #404040;
+    border-radius: 3px;
+  }
+  .thinking-description[open] {
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.24) !important;
+  }
+  .thinking-description[open]>div {
+    transform: translateY(0) !important;
+    opacity: 1 !important;
+  }
+  .thinking-description summary:hover {
+    background: #363636 !important;
+  }
+  .thinking-description[open] summary {
+    border-radius: 12px 12px 0 0 !important;
+  }
+  .thinking-description summary::marker {
+    display: none;
+  }
+  .thinking-description[open] summary .thinking-summary::after {
+    content: attr(data-open);
+  }
+  .thinking-description:not([open]) summary .thinking-summary::after {
+    content: attr(data-close);
+  }
+</style>`,
+          trimStrings: [],
+          minDepth: null,
+          maxDepth: null,
+          runOnSource: false,
+          promptOnly: false,
+          isactive: true,
+          markdownOnly: true,
+          runOnEdit: true,
+          substituteRegex: 0,
+          placement: [2]
+        },
+        {
+          id: 'reg-2',
+          scriptName: '对 AI 隐藏状态栏',
+          findRegex: '<StatusPlaceHolderImpl/>',
           replaceString: '',
           trimStrings: [],
           minDepth: null,
@@ -553,10 +641,10 @@ const App: React.FC = () => {
           placement: [2]
         },
         {
-          id: 'reg-2',
-          scriptName: 'Đang cập nhật biến',
-          findRegex: '/<update(?:variable)?>(?!.*<\/update(?:variable)?>)\s*([\s\S]*?)$/gsi',
-          replaceString: '<div class="mvu-updating-box">...Đang cập nhật biến...</div>',
+          id: 'reg-3',
+          scriptName: 'Xóa status_current_variables',
+          findRegex: '/<status_current_variables>([\\s\\S]*?)</status_current_variables>/gm',
+          replaceString: '',
           trimStrings: [],
           minDepth: null,
           maxDepth: null,
@@ -564,15 +652,214 @@ const App: React.FC = () => {
           promptOnly: false,
           isactive: true,
           markdownOnly: true,
-          runOnEdit: false,
+          runOnEdit: true,
           substituteRegex: 0,
           placement: [2]
         },
         {
-          id: 'reg-3',
-          scriptName: 'Cập nhật xong',
-          findRegex: '/<update(?:variable)?>\s*([\s\S]*?)\s*<\/update(?:variable)?>/gsi',
-          replaceString: '<div class="mvu-success-box">✅ Cập nhật hoàn tất</div>',
+          id: 'reg-4',
+          scriptName: 'Bảng MVUZOD ',
+          findRegex: '<StatusPlaceHolderImpl/>',
+          replaceString: `\`\`\`html\n${project.charData.ejs_template || ""}\n\`\`\``,
+          trimStrings: [],
+          minDepth: null,
+          maxDepth: 3,
+          runOnSource: false,
+          promptOnly: false,
+          isactive: true,
+          markdownOnly: true,
+          runOnEdit: true,
+          substituteRegex: 0,
+          placement: [2]
+        },
+        {
+          id: 'reg-5',
+          scriptName: 'Thiết lập khởi đầu',
+          findRegex: '\\\\[khởi tạo\\\\]',
+          replaceString: `\`\`\`html
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<style>
+  body {
+    background-color: #0f172a;
+    color: #e2e8f0;
+    font-family: system-ui, -apple-system, sans-serif;
+    padding: 15px;
+    margin: 0;
+  }
+  .setup-container {
+    max-width: 500px;
+    margin: 0 auto;
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    border: 1px solid #3b82f6;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.5), 0 0 15px rgba(59, 130, 246, 0.2);
+  }
+  h2 {
+    color: #3b82f6;
+    text-align: center;
+    margin-top: 0;
+    font-size: 20px;
+    border-bottom: 1px solid #334155;
+    padding-bottom: 10px;
+  }
+  .form-group {
+    margin-bottom: 15px;
+  }
+  label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 600;
+    font-size: 14px;
+    color: #94a3b8;
+  }
+  input, select {
+    width: 100%;
+    padding: 10px;
+    background: #1e293b;
+    border: 1px solid #475569;
+    border-radius: 6px;
+    color: #fff;
+    box-sizing: border-box;
+  }
+  input:focus, select:focus {
+    outline: none;
+    border-color: #3b82f6;
+  }
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 15px;
+  }
+  .stat-card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    padding: 10px;
+    text-align: center;
+  }
+  .stat-val {
+    font-size: 20px;
+    font-weight: bold;
+    color: #f59e0b;
+  }
+  .btn-roll {
+    margin-top: 5px;
+    width: 100%;
+    background: rgba(245, 158, 11, 0.2);
+    border: 1px solid #f59e0b;
+    color: #f59e0b;
+    padding: 5px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .btn-roll:hover {
+    background: #f59e0b;
+    color: #000;
+  }
+  .btn-start {
+    width: 100%;
+    padding: 12px;
+    background: linear-gradient(90deg, #3b82f6, #2563eb);
+    border: none;
+    border-radius: 6px;
+    color: white;
+    font-weight: bold;
+    font-size: 16px;
+    cursor: pointer;
+    box-shadow: 0 4px 10px rgba(37, 99, 235, 0.3);
+  }
+  .btn-start:hover {
+    filter: brightness(1.1);
+  }
+</style>
+</head>
+<body>
+<div class="setup-container">
+  <h2>⚙️ THIẾT LẬP NHÂN VẬT KHỞI ĐẦU</h2>
+  
+  <div class="form-group">
+    <label>Tên nhân vật</label>
+    <input type="text" id="char-name" value="{{user}}">
+  </div>
+  
+  <div class="form-group">
+    <label>Lớp nhân vật</label>
+    <select id="char-class">
+      <option value="Chiến binh">Chiến binh (Thiên về Sức mạnh)</option>
+      <option value="Pháp sư">Pháp sư (Thiên về Pháp thuật)</option>
+      <option value="Cung thủ">Cung thủ (Thiên về Linh hoạt)</option>
+    </select>
+  </div>
+  
+  <label>Chỉ số cơ bản</label>
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div>STR</div>
+      <div id="val-str" class="stat-val">10</div>
+    </div>
+    <div class="stat-card">
+      <div>AGI</div>
+      <div id="val-agi" class="stat-val">10</div>
+    </div>
+    <div class="stat-card">
+      <div>INT</div>
+      <div id="val-int" class="stat-val">10</div>
+    </div>
+  </div>
+  <button class="btn-roll" onclick="rollStats()">🎲 Roll Chỉ Số Ngẫu Nhiên</button>
+  
+  <button class="btn-start" onclick="submitSetup()" style="margin-top: 15px;">BẮT ĐẦU HÀNH TRÌNH ➔</button>
+</div>
+
+<script>
+  function rollStats() {
+    document.getElementById('val-str').textContent = Math.floor(Math.random() * 10) + 8;
+    document.getElementById('val-agi').textContent = Math.floor(Math.random() * 10) + 8;
+    document.getElementById('val-int').textContent = Math.floor(Math.random() * 10) + 8;
+  }
+  
+  function submitSetup() {
+    const name = document.getElementById('char-name').value;
+    const charClass = document.getElementById('char-class').value;
+    const str = parseInt(document.getElementById('val-str').textContent);
+    const agi = parseInt(document.getElementById('val-agi').textContent);
+    const intel = parseInt(document.getElementById('val-int').textContent);
+    
+    const patches = [
+      { "op": "replace", "path": "/stat_data/Nhân vật/HP", "value": 100 },
+      { "op": "replace", "path": "/stat_data/Nhân vật/MaxHP", "value": 100 },
+      { "op": "replace", "path": "/stat_data/Nhân vật/Cấp độ", "value": 1 },
+      { "op": "replace", "path": "/stat_data/Nhân vật/Sức mạnh", "value": str },
+      { "op": "replace", "path": "/stat_data/Nhân vật/Kinh nghiệm", "value": 0 },
+      { "op": "replace", "path": "/stat_data/Nhân vật/Độ hảo cảm", "value": 50 }
+    ];
+    
+    let out = "**Khởi Tạo Thành Công!**\\\\n";
+    out += "**Tên:** " + name + " | **Lớp:** " + charClass + "\\\\n";
+    out += "**Chỉ số:** STR: " + str + " | AGI: " + agi + " | INT: " + intel + "\\\\n\\\\n";
+    out += "<UpdateVariable>\\\\n<Analysis>Khởi tạo nhân vật mới: " + name + " lớp " + charClass + "</Analysis>\\\\n<JSONPatch>\\\\n" + JSON.stringify(patches, null, 2) + "\\\\n</JSONPatch>\\\\n</UpdateVariable>";
+    
+    if (typeof triggerSlash === 'function') {
+      triggerSlash(out);
+      if (typeof getCurrentMessageId === 'function') {
+        const msgId = getCurrentMessageId();
+        setTimeout(() => triggerSlash("/cut " + msgId), 1000);
+      }
+    } else {
+      console.log(out);
+      alert("Khởi tạo thành công (đã xuất ra Console)!");
+    }
+  }
+</script>
+</body>
+</html>
+\`\`\``,
           trimStrings: [],
           minDepth: null,
           maxDepth: null,
@@ -580,7 +867,7 @@ const App: React.FC = () => {
           promptOnly: false,
           isactive: true,
           markdownOnly: true,
-          runOnEdit: false,
+          runOnEdit: true,
           substituteRegex: 0,
           placement: [2]
         }
@@ -938,6 +1225,63 @@ AI hãy chú ý diễn giải thông tin dựa trên các lorebook entries này.
     alert("Đã reset dự án thành công!");
   };
 
+  const handleClearCache = () => {
+    const confirmClear = window.confirm("Bạn có chắc chắn muốn xóa toàn bộ cache? Hành động này sẽ xóa sạch lịch sử chat với AI (Tawa AI), từ điển biến số, lịch sử chat giả lập và các trạng thái mô phỏng để giải phóng bộ nhớ. Dữ liệu nhân vật, lorebook và cài đặt API của bạn sẽ ĐƯỢC GIỮ NGUYÊN.");
+    if (!confirmClear) return;
+
+    // Reset React message states
+    setChatMessages([
+      {
+        id: 'intro',
+        role: 'assistant',
+        content: 'Chào mừng ngươi đến với Cõi Tạo Thẻ. Ta là Tawa, người nắm giữ chìa khóa định hình thực tại của các nhân vật SillyTavern. Hãy đưa cho ta ý tưởng lorebook, bối cảnh thế giới của ngươi, ta sẽ dệt nên cấu trúc của nó!',
+        timestamp: Date.now()
+      }
+    ]);
+    setRegexMessages([
+      {
+        id: 'intro',
+        role: 'assistant',
+        content: 'Xin chào! Ta là Tawa Regex Helper. Ta sẽ giúp ngươi dệt các Regex script và giao diện HTML động cho thẻ của ngươi.',
+        timestamp: Date.now()
+      }
+    ]);
+    setEjsMessages([
+      {
+        id: 'intro',
+        role: 'assistant',
+        content: 'Hế lô! Ta là Tawa EJS Helper. Hãy cùng ta xây dựng EJS template cho prompt nhân vật và worldbook.',
+        timestamp: Date.now()
+      }
+    ]);
+    setCharMessages([]);
+    setDictMessages([]);
+    setEntryMessages([]);
+
+    // Clear dictionary text
+    setProject(prev => ({
+      ...prev,
+      charData: {
+        ...prev.charData,
+        mvu_dictionary: ''
+      },
+      updatedAt: Date.now()
+    }));
+
+    // Clear localStorage keys
+    localStorage.removeItem('sillyLore_chat_messages');
+    localStorage.removeItem('sillyLore_regex_messages');
+    localStorage.removeItem('sillyLore_ejs_messages');
+    localStorage.removeItem('sillyLore_char_messages');
+    localStorage.removeItem('sillyLore_dict_messages');
+    localStorage.removeItem('sillyLore_entry_messages');
+    localStorage.removeItem('sillyLore_simulator_history');
+    localStorage.removeItem('sillyLore_simulator_state');
+
+    alert("Đã xóa sạch cache lịch sử chat, từ điển biến số và giả lập thành công!");
+    window.location.reload();
+  };
+
   const selectedEntry = lorebook.entries.find(e => e.uid === selectedUid) || null;
 
   const tabs = [
@@ -994,6 +1338,10 @@ AI hãy chú ý diễn giải thông tin dựa trên các lorebook entries này.
              <Settings size={18} className="text-slate-400 hover:text-slate-200" />
            </Button>
 
+           <Button variant="ghost" size="sm" onClick={handleClearCache} title="Xóa cache chat & giả lập">
+             <Trash2 size={18} className="text-slate-400 hover:text-red-400" />
+           </Button>
+
            <Button variant="ghost" size="sm" onClick={() => setIsGuideOpen(true)} title="Hướng dẫn sử dụng">
              <HelpCircle size={18} className="text-slate-400 hover:text-slate-200" />
            </Button>
@@ -1027,6 +1375,7 @@ AI hãy chú ý diễn giải thông tin dựa trên các lorebook entries này.
             onSeedDefaultRegex={handleSeedDefaultRegex}
             onSeedSystemEntries={handleSeedSystemEntries}
             onResetProject={handleResetProject}
+            onClearCache={handleClearCache}
           />
         )}
 

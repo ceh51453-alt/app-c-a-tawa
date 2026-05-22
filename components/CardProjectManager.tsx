@@ -13,6 +13,7 @@ interface CardProjectManagerProps {
   onSeedDefaultRegex: () => void;
   onSeedSystemEntries: () => void;
   onResetProject: () => void;
+  onClearCache: () => void;
 }
 
 export const CardProjectManager: React.FC<CardProjectManagerProps> = ({
@@ -24,6 +25,7 @@ export const CardProjectManager: React.FC<CardProjectManagerProps> = ({
   onSeedDefaultRegex,
   onSeedSystemEntries,
   onResetProject,
+  onClearCache,
 }) => {
   const [isTypeSelectorOpen, setIsTypeSelectorOpen] = useState(false);
 
@@ -255,17 +257,34 @@ export const CardProjectManager: React.FC<CardProjectManagerProps> = ({
               {/* Dangerous Zone / Reset Project */}
               <div className="p-4.5 rounded-xl border border-red-500/10 bg-red-500/5 space-y-3">
                 <h4 className="text-xs font-bold text-red-400 uppercase tracking-wider">Khu vực nguy hiểm</h4>
-                <p className="text-[11px] text-slate-400 leading-relaxed">
-                  Hành động này sẽ xóa sạch toàn bộ thông tin nhân vật, lorebook, regex và đưa thẻ về trạng thái trống. Hãy cẩn thận!
-                </p>
-                <Button
-                  variant="danger"
-                  size="sm"
-                  className="w-full py-2.5 text-xs font-bold"
-                  onClick={onResetProject}
-                >
-                  Xóa Thẻ / Reset Dự án
-                </Button>
+                
+                <div className="space-y-2">
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Xóa sạch lịch sử chat với AI (Tawa AI), lịch sử chat giả lập và các trạng thái mô phỏng để giải phóng bộ nhớ. Giữ nguyên thông tin nhân vật, lorebook và cài đặt API.
+                  </p>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="w-full py-2.5 text-xs font-bold border border-red-500/20 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                    onClick={onClearCache}
+                  >
+                    Xóa Cache Lịch sử Chat / Giả lập
+                  </Button>
+                </div>
+
+                <div className="border-t border-white/5 pt-3.5 space-y-2">
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Xóa sạch toàn bộ thông tin nhân vật, lorebook, regex và đưa thẻ về trạng thái trống.
+                  </p>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    className="w-full py-2.5 text-xs font-bold"
+                    onClick={onResetProject}
+                  >
+                    Xóa Thẻ / Reset Dự án
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
