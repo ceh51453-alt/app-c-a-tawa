@@ -1,0 +1,219 @@
+/* Tawa Card Studio 2.0 - Core Style Design System */
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@300;400;500;600;700&family=Lora:ital,wght@0,400..700;1,400..700&display=swap');
+
+:root {
+  --bg-app-base: #060813;
+  --bg-app-panel: rgba(11, 15, 30, 0.65);
+  --border-glow-indigo: 0 0 18px rgba(99, 102, 241, 0.18);
+  --border-glow-emerald: 0 0 18px rgba(16, 185, 129, 0.15);
+  --border-glow-pink: 0 0 18px rgba(236, 72, 153, 0.15);
+  --border-glow-blue: 0 0 18px rgba(59, 130, 246, 0.15);
+  --glass-border: rgba(255, 255, 255, 0.06);
+  --glass-border-focus: rgba(255, 255, 255, 0.15);
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: var(--bg-app-base);
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.08) 0px, transparent 55%),
+    radial-gradient(at 100% 0%, rgba(236, 72, 153, 0.05) 0px, transparent 50%),
+    radial-gradient(at 50% 100%, rgba(16, 185, 129, 0.05) 0px, transparent 55%);
+  background-attachment: fixed;
+  color: #f8fafc;
+  overflow: hidden;
+}
+
+/* Glassmorphism utility panel */
+.glass-panel {
+  background: var(--bg-app-panel);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-panel-hover:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 8px 32px 0 rgba(99, 102, 241, 0.08);
+}
+
+/* Glow effects */
+.glow-active-indigo {
+  box-shadow: var(--border-glow-indigo);
+  border-color: rgba(99, 102, 241, 0.35) !important;
+}
+
+.glow-active-emerald {
+  box-shadow: var(--border-glow-emerald);
+  border-color: rgba(16, 185, 129, 0.35) !important;
+}
+
+.glow-active-pink {
+  box-shadow: var(--border-glow-pink);
+  border-color: rgba(236, 72, 153, 0.35) !important;
+}
+
+.glow-active-blue {
+  box-shadow: var(--border-glow-blue);
+  border-color: rgba(59, 130, 246, 0.35) !important;
+}
+
+/* Ambient glow orb animations in background */
+@keyframes pulseGlow {
+  0%, 100% {
+    opacity: 0.15;
+    transform: scale(1) translate(0px, 0px);
+  }
+  50% {
+    opacity: 0.25;
+    transform: scale(1.1) translate(20px, -20px);
+  }
+}
+
+.bg-glow-orb-1 {
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, rgba(0,0,0,0) 70%);
+  animation: pulseGlow 18s infinite ease-in-out;
+}
+
+.bg-glow-orb-2 {
+  background: radial-gradient(circle, rgba(236, 72, 153, 0.12) 0%, rgba(0,0,0,0) 70%);
+  animation: pulseGlow 24s infinite ease-in-out;
+  animation-delay: -6s;
+}
+
+/* Custom scrollbars */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(99, 102, 241, 0.6);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+/* Styles for HTML elements rendered in Chat Bubbles (SillyTavern style) */
+.html-message-content button {
+  background-color: rgba(99, 102, 241, 0.25);
+  border: 1px solid rgba(99, 102, 241, 0.45);
+  color: #f1f5f9;
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  margin: 3px 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  backdrop-filter: blur(4px);
+}
+
+.html-message-content button:hover {
+  background-color: rgba(99, 102, 241, 0.45);
+  border-color: rgba(99, 102, 241, 0.8);
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.4);
+  transform: translateY(-1px);
+}
+
+.html-message-content button:active {
+  transform: translateY(0);
+}
+
+.html-message-content table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 10px 0;
+  font-size: 12px;
+  background: rgba(8, 12, 28, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.html-message-content th, 
+.html-message-content td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.html-message-content th {
+  background-color: rgba(99, 102, 241, 0.15);
+  color: #c7d2fe;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.html-message-content tr:last-child td {
+  border-bottom: none;
+}
+
+/* Input custom styles */
+.styled-input {
+  background: rgba(5, 7, 16, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.styled-input:focus {
+  border-color: rgba(99, 102, 241, 0.5);
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.15);
+  background: rgba(5, 7, 16, 0.65);
+}
+
+.styled-input-error {
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.styled-input-error:focus {
+  border-color: rgba(239, 68, 68, 0.6);
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.15);
+}
+
+/* Micro-animations */
+.click-bounce {
+  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.click-bounce:active {
+  transform: scale(0.97);
+}
+
+/* Code area tweaks */
+.code-editor-line-col {
+  background-color: rgba(4, 5, 12, 0.7);
+  font-family: 'Fira Code', monospace;
+}
+
+/* Bento Item Styling */
+.bento-card {
+  background: rgba(255, 255, 255, 0.015);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.bento-card:hover {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.1);
+  transform: translateY(-2px);
+}
