@@ -558,6 +558,19 @@ Bạn có thể đọc danh sách các Regex Scripts hiện tại ở dưới.
 - delete: Xóa RegexScript (cần cung cấp target_id).
 </ACCESS_TO_REGEX>
 
+<ST_ARCHITECTURE_DIFFERENCE>
+**HIỂU ĐÚNG VỀ KIẾN TRÚC SILLYTAVERN ĐỂ KHÔNG NHẦM LẪN:**
+1. **Regex Script (Chạy ở Frontend/Trình duyệt - Nơi bạn đang làm việc):**
+   - Nhiệm vụ: Thay đổi giao diện người dùng (UI) sau khi AI đã trả lời.
+   - Cú pháp: HTML, CSS, Javascript (Vanilla).
+   - Môi trường: Trình duyệt web (Client-side). Có thể truy xuất biến thông qua 'getAllVariables()'.
+   - CẤM: Tuyệt đối không được chứa cú pháp EJS ('<%' '%>'), nếu không giao diện sẽ hỏng.
+2. **EJS (Chạy ở Backend/Trước khi gửi Prompt):**
+   - Nhiệm vụ: Tiền xử lý văn bản, quyết định text gửi cho AI.
+   - Cú pháp: Dùng thẻ EJS thuần túy ('<%' '%>', '<%=' '%>').
+   - Môi trường: Node.js (backend).
+</ST_ARCHITECTURE_DIFFERENCE>
+
 <REGEX_SYNTAX_CONVENTION>
 1. **Tìm kiếm (findRegex)**: Là chuỗi biểu thức chính quy (regex), ví dụ: "<StatusPlaceHolderImpl/>" hoặc "/<update(?:variable)?>\\\\s*([\\\\s\\\\S]*?)\\\\s*<\\\\/update(?:variable)?>/gsi".
 2. **Thay thế (replaceString)**: Chuỗi ký tự hoặc khối mã HTML.
@@ -743,6 +756,20 @@ export const EJS_BUILDER_PROMPT = `
 Bạn là Tawa, supreme star và cũng là chuyên gia thiết lập EJS Preprocessing của SillyTavern.
 Nhiệm vụ của bạn là hỗ trợ người dùng tạo ra các đoạn code EJS động tích hợp trong Lorebook hoặc Dashboard UI.
 EJS Preprocessing cho phép nạp dữ liệu Lorebook có điều kiện dựa trên trạng thái biến game.
+
+<ST_ARCHITECTURE_DIFFERENCE>
+**HIỂU ĐÚNG VỀ KIẾN TRÚC SILLYTAVERN ĐỂ KHÔNG NHẦM LẪN:**
+1. **EJS (Chạy ở Backend/Trước khi gửi Prompt):**
+   - Nhiệm vụ: Tiền xử lý văn bản, quyết định xem đoạn text nào sẽ được gửi cho AI.
+   - Cú pháp: Dùng thẻ EJS thuần túy ('<%' '%>', '<%=' '%>').
+   - Môi trường: Node.js (backend). Có thể gọi 'getvar()', 'setvar()'.
+   - CẤM: Không thể can thiệp giao diện HTML/DOM. Không dùng thẻ '<script>'.
+2. **Regex Script (Chạy ở Frontend/Trình duyệt):**
+   - Nhiệm vụ: Thay đổi giao diện người dùng (UI) sau khi AI đã trả lời.
+   - Cú pháp: HTML, CSS, Javascript (Vanilla).
+   - Môi trường: Trình duyệt web (Client-side).
+   - CẤM: Tuyệt đối không được chứa cú pháp EJS ('<%' '%>'), nếu không giao diện sẽ hỏng.
+</ST_ARCHITECTURE_DIFFERENCE>
 
 <EJS_RULES>
 1. Truy cập biến: Sử dụng \`_.get(stat_data, 'Đường.Dẫn.Biến', 'Giá trị mặc định')\` để đọc dữ liệu an toàn từ biến MVU.
