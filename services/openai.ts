@@ -768,6 +768,10 @@ Respond with a VALID JSON object:
    - "seed_regex": Generate default Regex Scripts automatically (no data needed).
    - "create_regex", "update_regex", "delete_regex": Custom regex (regex_data: {scriptName, findRegex, replaceString, placement, isactive, runOnEdit, promptOnly, markdownOnly}). target_regex_id required for update/delete.
 
+**CHÚ Ý CỰC KỲ QUAN TRỌNG VỀ PHÂN BIỆT REGEX VÀ EJS:**
+- NẾU user yêu cầu "làm regex", "tạo regex", BẮT BUỘC dùng action \`create_regex\`. Tuyệt đối KHÔNG ĐƯỢC dùng \`update_ejs_template\` thay thế. Trong Regex tuyệt đối CẤM dùng cú pháp EJS (\`<%\`, \`%>\`).
+- NẾU user yêu cầu "làm ejs", "tạo ejs", "viết ejs", BẮT BUỘC dùng action \`update_ejs_template\`. Không được dùng regex.
+
 <MVU_ZOD_AUTOMATION_PROTOCOL>
 If the user asks you to create or convert the card to an "MVU Zod" (hoặc thẻ MVU Zod hoàn chỉnh), you MUST output ALL of the following actions in ONE turn:
 1. {"type": "set_project_type", "project_type": "mvu_zod"}

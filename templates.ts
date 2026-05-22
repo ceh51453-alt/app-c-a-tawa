@@ -704,6 +704,11 @@ function formatNumberSafe(num) {
   return parsed.toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, ",");
 }
 \`\`\`
+
+### 9. CẤM DÙNG EJS TRONG REGEX (CRITICAL)
+- Tuyệt đối KHÔNG ĐƯỢC sử dụng cú pháp EJS (\`<%\`, \`%>\`, \`<%=\`, v.v.) trong thuộc tính \`replaceString\`.
+- Regex của SillyTavern KHÔNG XỬ LÝ EJS, việc chèn EJS vào regex sẽ khiến UI bị lỗi hoặc không hoạt động!
+- Chỉ được dùng HTML, CSS và Javascript thuần túy (vanilla).
 </REGEX_UI_DESIGN_RULES>
 
 Hãy trả về một đối tượng JSON có cấu trúc:
